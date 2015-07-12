@@ -3,6 +3,10 @@
 # rcon-perl v0.0a 
 # 2015-07-02
 
+
+# TODO: passing filehandles
+# TODO: exit cleanly
+
 use strict;
 use Socket;
 use IO::Socket::INET;
@@ -40,12 +44,24 @@ my $retry_timeout = 120;
 
 # colors
  my %ansi;
- $ansi{'white'}="\e[0;37m";
- $ansi{'bwhite'}="\e[1;37m";
- $ansi{'red'}="\e[0;31m";
- $ansi{'green'}="\e[0;32m";
- $ansi{'cyan'}="\e[0;36m";
- $ansi{'yellow'}="\e[0;33m";
+ $ansi{'reverse'}	="\e[7m";
+ $ansi{'normal'}	="\e[0m";
+ $ansi{'black'}		="\e[0;30m";
+ $ansi{'hblack'}	="\e[1;30m";
+ $ansi{'red'}		="\e[0;31m";
+ $ansi{'hred'}		="\e[1;31m";
+ $ansi{'green'}		="\e[0;32m";
+ $ansi{'hgreen'}	="\e[1;32m";
+ $ansi{'yellow'}	="\e[0;33m";
+ $ansi{'hyellow'}	="\e[1;33m";
+ $ansi{'blue'}		="\e[0;34m";
+ $ansi{'hblue'}		="\e[1;34m";
+ $ansi{'magenta'}	="\e[0;35m";
+ $ansi{'hmagenta'}	="\e[1;35m";
+ $ansi{'cyan'}		="\e[0;36m";
+ $ansi{'hcyan'}		="\e[1;36m";
+ $ansi{'white'}		="\e[0;37m";
+ $ansi{'hwhite'}	="\e[1;37m";
 
 
 # buffer flushing
@@ -54,6 +70,7 @@ $| = 1;
 my $inbuffer = "";
 my $rcon_logged_in = 0;
 my $client_connected = 0;
+my $login_timer = 0; #timer for auth
 
 #nonblocking input handle
 my $nb_stdin = new IO::Select( *STDIN );
@@ -87,7 +104,21 @@ while (1) {
 		# start the connection
 		client_connect();
 		rcon_login();
+		$login_timer = 0;
 	}
+
+	if ($rcon_logged_in == 0) {
+		if ($login_timer < 20) {
+			$login_timer++;
+		}
+		else {
+			$login_timer = 0;
+			printandlog("No login within time limit.  Retrying.\n");
+			client_disconnect();
+			sleep 1;
+		}
+	}
+
 
 	# Get any data from the server and process it
 	process_server_messages();
@@ -135,11 +166,17 @@ sub client_connect {
 			logandprint( "- Connection failed.  Retrying in $retry_timeout seconds.\n","red");
 			sleep $retry_timeout;
 		}
-	}
 
+	}
+	$rcon_logged_in = 0;
 	logandprint ("- Connection established\n");
 }
 
+sub client_disconnect {
+	$socket.close();
+	$client_connected = 0;
+	logandprint ("Closing connection.\n");
+}
 
 sub socket_connect {
 	logandprint ("- Opening connection to host '$host_ip' port '$host_port'.\n");
@@ -297,7 +334,7 @@ sub process_next_message_from_buffer {
 	#Packet type 0 - Discard it
 	if ($packet_type == 0) {
 		# tends to be dupe messages
-		#process_incoming_text("$packet_text");
+		process_incoming_text("--- $packet_text");
 	}
 
 	#Packet type 2 - Authorization Success
@@ -318,7 +355,8 @@ sub process_next_message_from_buffer {
 	}
 	else {
 		#this probably shouldn't happen unless its connected to something besides Rust
-		debugprint("*****************RCON CLIENT: Unhandled packet type: " . $packet_type . "\n");
+		logandprint("*****************RCON CLIENT: Unhandled packet type: " . $packet_type . "\n","red");
+		logandprint(str2hex($packet_text," "),"red");
 		process_incoming_text($packet_text);
 	}		
 
@@ -356,17 +394,49 @@ sub process_incoming_text {
 	logdata($data);
 
 	#lines starting with [RCON]
-	if ($data =~ /^\[RCON\]/) {
-		printcolor($data, "bwhite");
+	if ($data =~ /^\[RCON\]/)
+	{
+		printcolor($data, "hwhite");
 	}
 	#lines starting with [Oxide]
-	elsif ($data =~ /^\[Oxide\]/) {
+	elsif ($data =~ /^\[Oxide\]/) 
+	{
+		if ($data =~ /\[Error/) 
+		{
+			printcolor($data, "red");
+		}
+		elsif ($data =~ /\[Debug/) 
+		{
+			printcolor($data, "red");
+		}
+	}
+	elsif ($data =~ /^\[CHAT\]/) 
+	{
+		printcolor ($data,"hcyan");
+	}
+	elsif ($data =~ /was killed by/) 
+	{
 		printcolor($data, "yellow");
 	}
+
+
+	elsif ($data =~ /^[0-9].*joined/) 
+	{
+		printcolor($data, "hgreen");
+	}		
+	elsif ($data =~ /^[0-9].*kicked\: Steam/) 
+	{
+		printcolor($data, "green");
+	}		
+	elsif ($data =~ /^[0-9].*disconnecting/) 
+	{
+		printcolor($data, "green");
+	}		
 	#anything else just print it
-	else {
+	else 
+	{
 		#print "No match for: $data\n".str2hex($data)."\n";
-		print $data;
+		printcolor ($data);
 	}
 }
 
@@ -399,7 +469,9 @@ sub sendcmd {
 	my ($sendcmd) = $_[0];
 	my ($packet) = "";
 	$packet = makepacket ($sendcmd, $_[1]);
-	#dump2hex($packet," ");
+
+	# debugprint (str2hex($packet," ") ."\n");
+
 	writesocket ($packet)
 }
 
@@ -551,7 +623,8 @@ sub inttole32 {
 }
 
 # Convert 4 little endian bytes to an integer
-sub le32toint {
+sub le32toint 
+{
 	my $data = $_[0];
 	my $returnvalue = 0;
 	$returnvalue = ord(substr($data,0,1)) + ord(substr ($data,1,1)) * 256 + ord(substr ($data,2,1)) * 65536 + ord(substr ($data,3,1)) * 16777216;
@@ -559,17 +632,10 @@ sub le32toint {
 }
 
 
-# JUST FOR DEBUGGING
-# PRINT OUT A STRING CONVERTED TO HEX
-sub dump2hex {
-	my $string = $_[0];
-	my $separator = $_[1];
-	
-	print str2hex($string,$separator) ."\n";
-}
 
 # CONVERT STRING TO HEX
-sub str2hex {
+sub str2hex 
+{
 	my $string = "";
 	my $char = "";
 	my $hex = "";
@@ -577,13 +643,16 @@ sub str2hex {
 	my $separator = "";
 	$string = $_[0];
 	
-	if (defined $_[1]) {
+	if (defined $_[1]) 
+	{
 		$separator = $_[1];
 	}
 
-	foreach $char (split //, $string) {
+	foreach $char (split //, $string) 
+	{
 		$hex = sprintf("%x", ord($char));
-		if (length($hex) == 1) {
+		if (length($hex) == 1) 
+		{
 			$hex = "0" . $hex;
 		}
 		$returnstring .= $hex . $separator;
@@ -591,19 +660,22 @@ sub str2hex {
 	return $returnstring;
 }
 
-sub debugprint {
-	if ($debug_enabled == 1) {
-		printcolor ($_[0],"cyan");
-		logdata ($_[0]);
+sub debugprint 
+{
+	if ($debug_enabled == 1) 
+	{
+		logandprint ($_[0],"reverse");
 	}
 }
 
-sub Server_Disconnected {
+sub Server_Disconnected 
+{
 	logandprint ("- Server Disconnected\n", "red");
 	$client_connected = 0 ;
 }
 
-sub rcon_timestamp {
+sub rcon_timestamp 
+{
 
  my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
     return sprintf ( "%04d-%02d-%02d %02d:%02d:%02d: ",
@@ -611,48 +683,45 @@ sub rcon_timestamp {
 
 }
 
-sub printcolor {
+sub printcolor 
+{
 	my $text = shift;
 	my $color = shift;
 
-	if ($console_timestamp_enabled == 1) {
-		$text = rcon_timestamp() . $text;
-	}
-
-	if ($color_enabled == 0) {
+	#handle color off (print optional timestamp, and text
+	if ($color_enabled == 0) 
+	{
+		#only adding the timestamp now if no color
+		if ($console_timestamp_enabled == 1) 
+		{
+			$text = rcon_timestamp() . $text;
+		}
 		print $text;
 		return;
 	}
-	elsif ($color eq "") {
-		$text = $ansi{'white'} . $text;
-	} 
-	elsif 
-		($color eq "white") {
-		$text = $ansi{'white'} . $text;
+
+
+	elsif ($color ne "") 
+	{
+		if ($ansi{$color} eq "") 
+		{
+			print "Color not defined '$color'\n";
+		}
+
+		$text = $ansi{$color} . $text;
+
 	}
-	elsif 
-		($color eq "red") {
-		$text = $ansi{'red'} . $text;
+
+	#start by text clearing any reverse background, change to white
+	$text = $ansi{'white'} . $text;
+
+
+	
+	if ($console_timestamp_enabled == 1) 
+	{
+		$text = $ansi{'white'}.rcon_timestamp() . $text;
 	}
-	elsif 
-		($color eq "green") {
-		$text = $ansi{'green'} . $text;
-	}
-	elsif 
-		($color eq "cyan") {
-		$text = $ansi{'cyan'} . $text;
-	}
-	elsif 
-		($color eq "bwhite") {
-		$text = $ansi{'bwhite'} . $text;
-	}
-	elsif 
-		($color eq "yellow") {
-		$text = $ansi{'yellow'} . $text;
-	}
-	else {
-		print "printcolor: unknown color '" . $color."'\n";
-	}
-	print $text . $ansi{'white'};	
+
+	print $text . $ansi{'white'};
 
 }

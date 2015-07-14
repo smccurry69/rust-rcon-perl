@@ -36,7 +36,7 @@ my $rcon_password = "";
 ################################################
 
 my $ansi_enabled = 1;
-my $logging_enabled = 1;
+my $logging_enabled = 0;
 my $logging_timestamp_enabled = 1;
 my $console_timestamp_enabled = 1;
 my $logfilename = "rcon-perl.log";

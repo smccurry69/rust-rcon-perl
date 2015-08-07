@@ -42,6 +42,7 @@ my $console_timestamp_enabled = 1;
 my $logfilename = "~/rcon-perl.log";
 my $debug_enabled = 0;
 my $retry_timeout = 30;
+my $crlf = "\r\n";
 ################################################
 
 # colors
@@ -89,11 +90,11 @@ load_config();
 
 if ($logging_enabled == 1) {
 	if (open $logfilefh, ">>", $logfilename) {
-		printcolor("- Started logging to $logfilename\n");
+		printcolor("- Started logging to $logfilename$crlf");
 	}
 	else {
 		$logging_enabled = 0;
-		printcolor("- Failed to open '$logfilename' for append.  Logging disabled.\n","red");
+		printcolor("- Failed to open '$logfilename' for append.  Logging disabled.$crlf","red");
 	}
 }
 
@@ -117,7 +118,7 @@ while (1) {
 		}
 		else {
 			$login_timer = 0;
-			logandprint("No login within time limit.  Retrying.\n");
+			logandprint("No login within time limit.  Retrying.$crlf");
 			client_disconnect();
 			sleep 1;
 		}
@@ -129,10 +130,14 @@ while (1) {
 
 	# Deal with user inputs
 	process_user_input();
-
 	# Sleep a quarter second
 	select(undef, undef, undef, 0.25);
 
+	# Get any data from the server and process it
+	process_server_messages();
+
+	# sleep one second
+	sleep 1;
 
 }
 
@@ -141,7 +146,7 @@ sub load_config {
 
 	if ($host_ip eq "" || $host_port eq "") {
 		if ($ARGV[0] eq "" || $ARGV[1] eq "") {
-			print "Usage: $0 hostname portnumber\n";
+			print "Usage: $0 hostname portnumber$crlf";
 			exit;
 		}
 		else {
@@ -149,7 +154,7 @@ sub load_config {
 			$host_port = $ARGV[1];
 			if ($ARGV[2] ne "") {
 				$rcon_password = $ARGV[2];
-				print "Using password '".$rcon_password." from the command line.  Generally this is unsafe.\n";
+				print "Using password '".$rcon_password." from the command line.  Generally this is unsafe.$crlf";
 			}
 		}
 	}
@@ -185,36 +190,36 @@ sub client_connect {
 		$client_connected = check_client_connected();
 		if ($client_connected == 0)
 		{
-			logandprint( "- Connection failed.  Retrying in $retry_timeout seconds.\n","red");
+			logandprint( "- Connection failed.  Retrying in $retry_timeout seconds.$crlf","red");
 			sleep $retry_timeout;
 		}
 
 	}
 	$rcon_logged_in = 0;
-	logandprint ("- Connection established\n");
+	logandprint ("- Connection established$crlf");
 }
 
 
 sub socket_connect {
-	logandprint ("- Opening connection to host '$host_ip' port '$host_port'.\n");
+	logandprint ("- Opening connection to host '$host_ip' port '$host_port'.$crlf");
 	 $socket = IO::Socket::INET->new(PeerAddr => $host_ip,
                                  PeerPort => $host_port,
                                  Proto    => 'tcp',
 				 Blocking => 0)
-	 or die "Can't start the connection.\n";
+	 or die "Can't start the connection.$crlf";
 
 	sleep 1;
 	if ($socket->connected) {
 		$client_connected = 1;
 		return;
 	}
-	logandprint ("- Waiting on connection\n");
+	logandprint ("- Waiting on connection$crlf");
 	sleep 5;
 	if ($socket->connected) {
 		$client_connected = 1;
 		return;
 	} else {
-		logandprint ("- No connection\n");
+		logandprint ("- No connection$crlf");
 	}
 
 
@@ -224,17 +229,17 @@ sub socket_connect {
 # - called when disconnection was detected
 sub handle_client_disconnected 
 {
-	logandprint ("- Server Disconnected\n", "red");
-	$client_connected = 0 ;
-	socket_disconnect();
+	logandprint ("- Server Disconnected$crlf", "red");
+	client_disconnect();
 }
 
 # client_disconnect
 # - called when we want to initiate a disconnect
 sub client_disconnect {
+	logandprint ("- Closing connection.$crlf");
 	socket_disconnect();
 	$client_connected = 0;
-	logandprint ("Closing connection.\n");
+	$rcon_logged_in = 0;
 }
 
 
@@ -266,7 +271,7 @@ sub check_client_connected {
 
 
 sub rcon_login {
-	logandprint ("- Sending RCON Password\n");
+	logandprint ("- Sending RCON Password$crlf");
 	# RCON LOGIN
 	sleep 1;
 	sendauth ($rcon_password,"AUTH");
@@ -274,7 +279,7 @@ sub rcon_login {
 
 #stuff to do when we get authorized to rcon
 sub rcon_authorized {
-	logandprint ("- *RCON AUTHORIZED*\n","green");
+	logandprint ("- *RCON AUTHORIZED*$crlf","green");
 	
 	$rcon_logged_in = 1;
 	sleep 1;
@@ -285,9 +290,9 @@ sub rcon_authorized {
 
 #stuff to do when we are refused by rcon
 sub rcon_not_authorized {
-	logandprint ("- *RCON -NOT- AUTHORIZED*\n","red");
+	logandprint ("- *RCON -NOT- AUTHORIZED*$crlf","red");
 	socket_disconnect();
-	die "Bad password?\n";
+	die "Bad password?$crlf";
 }
 
 # GET ANY INCOMING SOCKET DATA AND PROCESS IT
@@ -329,7 +334,7 @@ sub process_next_message_from_buffer {
 		if (length($message_buffer) == 0) {
 			return "";
 		}
-		print "not enough data yet (".length($message_buffer)." bytes : '$message_buffer'\n";
+		print "not enough data yet (".length($message_buffer)." bytes : '$message_buffer'$crlf";
 		return $message_buffer;
 	}
 
@@ -349,7 +354,7 @@ sub process_next_message_from_buffer {
 	$packet_type = le32toint ($packet_type); 
 
 	if (length($message_buffer) < $packet_size + 4) {
-		debugprint ("WARNING: Not enough data yet\n");
+		debugprint ("WARNING: Not enough data yet$crlf");
 		return $message_buffer;
 	}
 
@@ -370,7 +375,7 @@ sub process_next_message_from_buffer {
 		}
 			
 		
-		debugprint ("Processing inbound packet: type: $packet_type (".str2hex(inttole32($packet_type)).") $packet_type_text  /  ID: $packet_id (". str2hex(inttole32($packet_id)).")\nMESSAGE: " . str2hex($packet_text)."\n");
+		debugprint ("Processing inbound packet: type: $packet_type (".str2hex(inttole32($packet_type)).") $packet_type_text  /  ID: $packet_id (". str2hex(inttole32($packet_id)).")${crlf}MESSAGE: " . str2hex($packet_text)."$crlf");
 	}
 
 
@@ -398,7 +403,7 @@ sub process_next_message_from_buffer {
 	}
 	else {
 		#this probably shouldn't happen unless its connected to something besides Rust
-		logandprint("*****************RCON CLIENT: Unhandled packet type: " . $packet_type . "\n","red");
+		logandprint("*****************RCON CLIENT: Unhandled packet type: " . $packet_type . "$crlf","red");
 		logandprint(str2hex($packet_text," "),"red");
 		process_incoming_text($packet_text);
 	}		
@@ -431,7 +436,7 @@ sub process_incoming_text {
 	$data =~ s/\x00//g;
 
 	#add a carriage return at the end
-	$data = $data . "\n";
+	$data = $data . "$crlf";
 
 	#log the text
 	logdata($data);
@@ -475,10 +480,14 @@ sub process_incoming_text {
 	{
 		printcolor($data, "green");
 	}		
+	elsif ($data =~ /^[0-9].*kicked\: EAC\: unconnected/) 
+	{
+		printcolor($data, "yellow");
+	}		
 	#anything else just print it
 	else 
 	{
-		#print "No match for: $data\n".str2hex($data)."\n";
+		#print "No match for: $data$crlf".str2hex($data)."$crlf";
 		printcolor ($data);
 	}
 }
@@ -521,7 +530,7 @@ sub sendcmd {
 	my ($packet) = "";
 	$packet = makepacket ($sendcmd, $_[1]);
 
-	# debugprint (str2hex($packet," ") ."\n");
+	# debugprint (str2hex($packet," ") ."${crlf}");
 
 	writesocket ($packet)
 }
@@ -533,10 +542,10 @@ sub writesocket {
 	my $packet = $_[0];
 
 	if ($debug_enabled == 1) {
-		debugprint ("WRITESOCKET: " . str2hex($packet) . "\n");
+		debugprint ("WRITESOCKET: " . str2hex($packet) . "${crlf}");
 	}
 
-	#print "WRITESOCKET: (".length($packet)." bytes) data: $packet hex: ".str2hex($packet," ")."\n";
+	#print "WRITESOCKET: (".length($packet)." bytes) data: $packet hex: ".str2hex($packet," ")."${crlf}";
 	syswrite ($sockhandle, $packet, length($packet));
 	$sockhandle->flush;
 }
@@ -554,14 +563,14 @@ sub readsocket {
 	if (defined $rb) {
 		if ($rb > 0) {
 			#if ($debug_enabled == 1) {
-			#	debugprint ("READSOCKET: got $rb bytes\nREADSOCKET TEXT: " . $data. "\nREADSOCKET HEX:" . str2hex($data) . "\n");
+			#	debugprint ("READSOCKET: got $rb bytes${crlf}READSOCKET TEXT: " . $data. "${crlf}READSOCKET HEX:" . str2hex($data) . "${crlf}");
 			#}
 			return $data;
 
 		}
 		else {
 			#Probably disconnected
-			logandprint("-Remote Connection closed\n","red");
+			logandprint("-Remote Connection closed${crlf}","red");
 			handle_client_disconnected();
 			return "";
 			
@@ -577,7 +586,7 @@ sub readsocket {
 
 		# if error is something else, assume we got a connection drop
 		$client_connected = 0;
-		logandprint ("- Connection dropped.\n","red");
+		logandprint ("- Connection dropped.${crlf}","red");
 		handle_client_disconnected();
 		return "";
 	}
@@ -660,12 +669,12 @@ sub inttole32 {
 		$returnvalue = chr(0) . chr(0) . chr(0) . chr(0);
 	}
 	if (length($returnvalue) != 4) {
-		print "inttole32 calculation failure: " . $_[0] . " -> " . str2hex($returnvalue) . "\n";
+		print "inttole32 calculation failure: " . $_[0] . " -> " . str2hex($returnvalue) . "${crlf}";
 
-		print length($returnvalue)."\n";
+		print length($returnvalue)."${crlf}";
 		die;
 	}
-	#debugprint ("inttole32: " . $_[0] . " -> " . str2hex($returnvalue) . "\n");
+	#debugprint ("inttole32: " . $_[0] . " -> " . str2hex($returnvalue) . "${crlf}");
 	return $returnvalue;
 }
 
@@ -747,7 +756,7 @@ sub printcolor
 	{
 		if ($ansi{$color} eq "") 
 		{
-			print "Color not defined '$color'\n";
+			print "Color not defined '$color'${crlf}";
 		}
 
 		$text = $ansi{$color} . $text;

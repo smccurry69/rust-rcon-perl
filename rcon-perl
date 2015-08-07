@@ -378,7 +378,6 @@ sub process_next_message_from_buffer {
 		debugprint ("Processing inbound packet: type: $packet_type (".str2hex(inttole32($packet_type)).") $packet_type_text  /  ID: $packet_id (". str2hex(inttole32($packet_id)).")${crlf}MESSAGE: " . str2hex($packet_text)."$crlf");
 	}
 
-
 	#Packet type 0 - Discard it
 	if ($packet_type == 0) {
 		# tends to be dupe messages
@@ -456,6 +455,10 @@ sub process_incoming_text {
 		elsif ($data =~ /\[Debug/) 
 		{
 			printcolor($data, "red");
+		}
+		else
+		{
+			printcolor ($data, "white");
 		}
 	}
 	elsif ($data =~ /^\[CHAT\]/) 

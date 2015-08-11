@@ -138,7 +138,6 @@ while (1) {
 
 	# sleep one second
 	sleep 1;
-
 }
 
 
@@ -296,16 +295,31 @@ sub rcon_not_authorized {
 }
 
 # GET ANY INCOMING SOCKET DATA AND PROCESS IT
-sub process_server_messages {
+sub process_server_messages 
+{
+
 	# get any waiting data
 	$inbuffer .= readsocket($socket);
 
-	if ($inbuffer ne "") {
+	my $originalbuffersize = length($inbuffer);
+
+	if ($inbuffer ne "")
+	{
 		# PARSE AND PROCESS INCOMING DATA, unprocessed data is returned back to us
-		while (length($inbuffer) > 12) {
+		while (length($inbuffer) > 13)
+		{
+
 			$inbuffer = process_next_message_from_buffer ($inbuffer);
+			if ($originalbuffersize == length($inbuffer) )
+			{
+				logandprint "dbg: (needs fixing) $originalbuffersize  buffer: $inbuffer\n";
+				logandprint str2hex($inbuffer)."\n";
+				logandprint "buffer not properly processed, purging buffer\n";
+				$inbuffer = "";
+			}
 		}
-	} else {
+	} else 
+	{
 		#no data
 	}
 }

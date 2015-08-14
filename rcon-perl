@@ -43,6 +43,9 @@ my $logfilename = "~/rcon-perl.log";
 my $debug_enabled = 0;
 my $retry_timeout = 30;
 my $crlf = "\r\n";
+my @commandqueue=("status", "players");
+#my @commandqueue=("status", "players", "server.saveinterval 1200");
+my $exit_after_queue_processed = 0;
 ################################################
 
 # colors
@@ -128,8 +131,13 @@ while (1) {
 	# Get any data from the server and process it
 	process_server_messages();
 
+
 	# Deal with user inputs
 	process_user_input();
+
+	# Process any queued outbound messages
+	process_commandqueue();
+
 	# Sleep a quarter second
 	select(undef, undef, undef, 0.25);
 
@@ -284,7 +292,7 @@ sub rcon_authorized {
 	sleep 1;
 
 	# RCON GET STATUS
-	sendcmd ("status");
+	#sendcmd ("status");
 }
 
 #stuff to do when we are refused by rcon
@@ -425,15 +433,53 @@ sub process_next_message_from_buffer {
 	return $leftoverdata;
 }
 
+
+sub process_commandqueue {
+	my $nextline = "";
+
+
+	while ($commandqueue[0] ne "")
+	{
+
+		#make sure we are logged in, abort sending if we aren't
+		if ($rcon_logged_in == 0 ) {
+			print "- Delaying output queue, not logged in\n";
+			return;
+		}
+
+		#send all items in the queue
+		if ($commandqueue[0] ne "") {
+			$nextline = shift(@commandqueue);
+			print "- Sending from queue: $nextline\n";
+			sendcmd($nextline);
+			#TODO: Verify command was properly received
+			return;
+		}
+	}
+
+	#todo: untested rig up
+	if ($exit_after_queue_processed == 1) {
+		sleep 2;
+		client_disconnect();
+		exit;
+	}
+}
+
+		
 # process_user_input ()
 # - See if we have anything to send from the user
-sub process_user_input {
-		# Nonblocking input check
-	if ( $nb_stdin -> can_read(0) )	{
+sub process_user_input
+{
+
+	# Nonblocking input check
+	if ( $nb_stdin -> can_read(0) )
+	{
 		$user_input_buffer = <STDIN>;
 		chomp ($user_input_buffer);
-		# Send command to the server
-		sendcmd($user_input_buffer);
+
+		# queue the command for sending
+		push @commandqueue,$user_input_buffer;
+
 		$user_input_buffer = "";
  	}
 

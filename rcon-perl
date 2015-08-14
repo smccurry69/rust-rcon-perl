@@ -443,14 +443,14 @@ sub process_commandqueue {
 
 		#make sure we are logged in, abort sending if we aren't
 		if ($rcon_logged_in == 0 ) {
-			print "- Delaying output queue, not logged in\n";
+			logandprint ("- Delaying output queue, not logged in\n");
 			return;
 		}
 
 		#send all items in the queue
 		if ($commandqueue[0] ne "") {
 			$nextline = shift(@commandqueue);
-			print "- Sending from queue: $nextline\n";
+			debugprint ("- Sending from queue: $nextline\n");
 			sendcmd($nextline);
 			#TODO: Verify command was properly received
 			return;

@@ -312,9 +312,9 @@ sub process_server_messages
 			$inbuffer = process_next_message_from_buffer ($inbuffer);
 			if ($originalbuffersize == length($inbuffer) )
 			{
-				logandprint "dbg: (needs fixing) $originalbuffersize  buffer: $inbuffer\n";
-				logandprint str2hex($inbuffer)."\n";
-				logandprint "buffer not properly processed, purging buffer\n";
+				logandprint ("dbg: (needs fixing) $originalbuffersize  buffer: $inbuffer\n");
+				logandprint (str2hex($inbuffer)."\n");
+				logandprint ("buffer not properly processed, purging buffer\n");
 				$inbuffer = "";
 			}
 		}

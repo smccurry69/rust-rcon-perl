@@ -190,6 +190,16 @@ sub load_config
 			print "Debug mode enabled${crlf}";
 			$debug_enabled = 1;
 		}
+		elsif ($line eq "--ansi")
+		{
+			print "ANSI on${crlf}";
+			$ansi_enabled = 1;
+		}
+		elsif ($line eq "--no-ansi")
+		{
+			print "ANSI off${crlf}";
+			$ansi_enabled = 0;
+		}
 		elsif ($line eq "--nologging")
 		{
 			$logging_enabled = 0;
@@ -229,8 +239,10 @@ sub display_command_line_help
 		print "-p portname${crlf}";
 		print "-w password${crlf}";
 		print "-l logfilename${crlf}";
-		print "--debug${crlf}";
 		print "--nologging${crlf}";
+		print "--ansi${crlf}";
+		print "--no-ansi${crlf}";
+		print "--debug${crlf}";
 		print "${crlf}";
 		exit;
 }
@@ -461,7 +473,7 @@ sub process_next_message_from_buffer {
 		}
 			
 		
-		debugprint ("Processing inbound packet: Size=".(($packet_size)+4)." (".str2hex(inttole32(($packet_size)))."+4b) / ID: $packet_id (". str2hex(inttole32($packet_id)).") / type: $packet_type (".str2hex(inttole32($packet_type)).") $packet_type_text  (".length($leftoverdata)."b left in queue)${crlf}");
+		debugprint ("Processing inbound packet: Size=".(($packet_size)+4)." (".str2hex(inttole32(($packet_size)))."+4b) / ID: $packet_id (". str2hex(inttole32($packet_id)).") / type: $packet_type-".${packet_type_text}." (".str2hex(inttole32($packet_type)).")  (".length($leftoverdata)."b left in queue)${crlf}");
 		debugprint ("Data: " . str2hex(substr($message_buffer,0,$packet_size+2))."${crlf}");
 		#debugprint ("Message: " . str2hex($packet_text)."${crlf}");
 	}
@@ -503,12 +515,12 @@ sub process_next_message_from_buffer {
 	return $leftoverdata;
 }
 
-
+#send messages, wait for acknowledgement before going to the next
 sub process_command_queue {
 	my $nextline = "";
 
 
-	while ($command_queue[0] ne "")
+	if ($#command_queue > -1)
 	{
 
 		#make sure we are logged in, abort sending if we aren't
@@ -539,6 +551,7 @@ sub process_command_queue {
 					debugprint("Process_command_queue: Timeout waiting for response, retransmitting${crlf}");
 
 					sendcmd($msg_last_sent,$msgid_last_sent);
+					return;
 				}
 				else
 				{
@@ -557,7 +570,7 @@ sub process_command_queue {
 		}
 
 		#send all items in the queue
-		if ($command_queue[0] ne "") 
+		if ($#command_queue > -1) 
 		{
 			$nextline = shift(@command_queue);
 			debugprint ("- Sending from queue: $nextline${crlf}");
@@ -591,7 +604,7 @@ sub process_user_input
 
 		# queue the command for sending
 		push @command_queue,$user_input_buffer;
-
+		debugprint("process_user_input: Adding '$user_input_buffer' to send queue.  (".$#command_queue." items ahead in queue)${crlf})");
 		$user_input_buffer = "";
  	}
 

@@ -42,8 +42,8 @@ my $logfilename = "~/rust-rcon-perl.log";
 my $debug_enabled = 0;
 my $retry_timeout = 30;
 my $crlf = "\r\n";
-my @command_queue=("status", "players");
-#my @command_queue=("status", "players", "server.saveinterval 1200");
+my @login_command_queue=("status", "players");
+#my @login_command_queue=("status", "players", "server.saveinterval 1200");
 my $exit_after_queue_processed = 0;
 ################################################
 
@@ -70,6 +70,8 @@ my $exit_after_queue_processed = 0;
  $ansi{'hwhite'}	="\e[1;37m";
 
 
+# variables related to tracking the send queue
+my @command_queue;
 my $msgid_last_sent = 0;
 my $msgid_last_received = 0;
 my $msgid_wait_counter = 0;
@@ -77,6 +79,10 @@ my $msgid_retry_counter = 0;
 my $msgid_wait_max = 4;
 my $msgid_retry_max = 2;
 my $msg_last_sent="";
+
+my $timer_minutes = 0;
+my $timer_hours = 0;
+my $timer_last_minute = getminute();
 
 # buffer flushing
 $| = 1;
@@ -150,9 +156,14 @@ while (1) {
 	# Get any data from the server and process it
 	process_server_messages();
 
+
+	process_timers();
+
 	# sleep one second
 	sleep 1;
+
 }
+
 
 
 sub load_config
@@ -360,6 +371,10 @@ sub rcon_login {
 #stuff to do when we get authorized to rcon
 sub rcon_authorized {
 	logandprint ("- *RCON AUTHORIZED*${crlf}","green");
+
+	
+	@command_queue = (@command_queue, @login_command_queue);
+	debugprint("- Queueing up login commands${crlf}");
 	
 	$rcon_logged_in = 1;
 	sleep 1;
@@ -604,7 +619,7 @@ sub process_user_input
 
 		# queue the command for sending
 		push @command_queue,$user_input_buffer;
-		debugprint("process_user_input: Adding '$user_input_buffer' to send queue.  (".$#command_queue." items ahead in queue)${crlf})");
+		debugprint("process_user_input: Adding '$user_input_buffer' to send queue.  (".$#command_queue." items ahead in queue)${crlf}");
 		$user_input_buffer = "";
  	}
 
@@ -678,6 +693,22 @@ sub process_incoming_text {
 		#print "No match for: $data${crlf}".str2hex($data)."${crlf}";
 		printcolor ($data);
 	}
+}
+
+sub process_timers
+{
+	if (getminute() != $timer_last_minute)
+	{
+		$timer_last_minute=getminute();
+		$timer_minutes++;
+		debugprint ("TICK, processing_timers ".$timer_hours." hours ".$timer_minutes." minutes ${crlf}");
+	}
+	if ($timer_minutes == 60)
+	{
+		$timer_hours++;
+		$timer_minutes=0;
+	}
+
 }
 
 sub logandprint {
@@ -921,6 +952,12 @@ sub debugprint
 	}
 }
 
+sub getminute
+{
+ 	my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+	return $min;
+
+}
 sub rcon_timestamp 
 {
 

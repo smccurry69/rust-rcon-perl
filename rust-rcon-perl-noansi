@@ -42,8 +42,8 @@ my $logfilename = "~/rust-rcon-perl.log";
 my $debug_enabled = 0;
 my $retry_timeout = 30;
 my $crlf = "\r\n";
-my @commandqueue=("status", "players");
-#my @commandqueue=("status", "players", "server.saveinterval 1200");
+my @command_queue=("status", "players");
+#my @command_queue=("status", "players", "server.saveinterval 1200");
 my $exit_after_queue_processed = 0;
 ################################################
 
@@ -70,6 +70,13 @@ my $exit_after_queue_processed = 0;
  $ansi{'hwhite'}	="\e[1;37m";
 
 
+my $msgid_last_sent = 0;
+my $msgid_last_received = 0;
+my $msgid_wait_counter = 0;
+my $msgid_retry_counter = 0;
+my $msgid_wait_max = 4;
+my $msgid_retry_max = 2;
+my $msg_last_sent="";
 
 # buffer flushing
 $| = 1;
@@ -92,11 +99,11 @@ load_config();
 
 if ($logging_enabled == 1) {
 	if (open $logfilefh, ">>", $logfilename) {
-		printcolor("- Started logging to $logfilename$crlf");
+		printcolor("- Started logging to $logfilename${crlf}");
 	}
 	else {
 		$logging_enabled = 0;
-		printcolor("- Failed to open '$logfilename' for append.  Logging disabled.$crlf","red");
+		printcolor("- Failed to open '$logfilename' for append.  Logging disabled.${crlf}","red");
 	}
 }
 
@@ -120,7 +127,7 @@ while (1) {
 		}
 		else {
 			$login_timer = 0;
-			logandprint("No login within time limit.  Retrying.$crlf");
+			logandprint("No login within time limit.  Retrying.${crlf}");
 			client_disconnect();
 			sleep 1;
 		}
@@ -135,7 +142,7 @@ while (1) {
 	process_user_input();
 
 	# Process any queued outbound messages
-	process_commandqueue();
+	process_command_queue();
 
 	# Sleep a quarter second
 	select(undef, undef, undef, 0.25);
@@ -148,29 +155,57 @@ while (1) {
 }
 
 
-sub load_config {
+sub load_config
+{
 	my $line;
 
-	while ($#ARGV > 0) {
+	while ($#ARGV > -1) {
 		my $line=shift(@ARGV);
-		if ($line eq "-s") 
+
+		if ($line eq "--help")
+		{
+			display_command_line_help();
+			die;
+		}
+		elsif ($line eq "-s") 
 		{
 			$host_ip = shift(@ARGV);
 		}
-		if ($line eq "-p") 
+		elsif ($line eq "-p") 
 		{ 
 			$host_port = shift(@ARGV);
 		}
 
-		if ($line eq "-w") 
+		elsif ($line eq "-w") 
 		{
 			$rcon_password = shift(@ARGV);
 		}
+		elsif ($line eq "-l")
+		{
+			$logging_enabled = 1;
+			$logfilename = shift(@ARGV);
+		}
+		elsif ($line eq "--debug")
+		{
+			print "Debug mode enabled${crlf}";
+			$debug_enabled = 1;
+		}
+		elsif ($line eq "--nologging")
+		{
+			$logging_enabled = 0;
+		}
+		else
+		{
+			print "Invalid option: $line${crlf}${crlf}";
+			display_command_line_help();
+		}
+
+
 	}
 
 	if ($host_ip eq "" || $host_port eq "") 
 	{
-		print "Usage: $0 -s server -p portnumber$crlf";
+		display_command_line_help();
 		exit;
 	}
 
@@ -185,6 +220,21 @@ sub load_config {
 	
 
 }
+
+
+sub display_command_line_help
+{
+		print "Usage: $0 -s server -p portnumber${crlf}${crlf}";
+		print "-s servername${crlf}";
+		print "-p portname${crlf}";
+		print "-w password${crlf}";
+		print "-l logfilename${crlf}";
+		print "--debug${crlf}";
+		print "--nologging${crlf}";
+		print "${crlf}";
+		exit;
+}
+
 
 #TODO: fix this to be more correct
 #expand any leading tilde or other cleanup here
@@ -204,36 +254,40 @@ sub client_connect {
 		$client_connected = check_client_connected();
 		if ($client_connected == 0)
 		{
-			logandprint( "- Connection failed.  Retrying in $retry_timeout seconds.$crlf","red");
+			logandprint( "- Connection failed.  Retrying in $retry_timeout seconds.${crlf}","red");
 			sleep $retry_timeout;
 		}
 
 	}
+	debugprint ("Client connected, clearing flags rcon_logged_in, and counters msgid_last_sent, msgid_last_received${crlf}");
 	$rcon_logged_in = 0;
-	logandprint ("- Connection established$crlf");
+	$msgid_last_sent = 0;
+	$msgid_last_received = 0;
+
+	logandprint ("- Connection established${crlf}");
 }
 
 
 sub socket_connect {
-	logandprint ("- Opening connection to host '$host_ip' port '$host_port'.$crlf");
+	logandprint ("- Opening connection to host '$host_ip' port '$host_port'.${crlf}");
 	 $socket = IO::Socket::INET->new(PeerAddr => $host_ip,
                                  PeerPort => $host_port,
                                  Proto    => 'tcp',
 				 Blocking => 0)
-	 or die "Can't start the connection.$crlf";
+	 or die "Can't start the connection.${crlf}";
 
 	sleep 1;
 	if ($socket->connected) {
 		$client_connected = 1;
 		return;
 	}
-	logandprint ("- Waiting on connection$crlf");
+	logandprint ("- Waiting on connection${crlf}");
 	sleep 5;
 	if ($socket->connected) {
 		$client_connected = 1;
 		return;
 	} else {
-		logandprint ("- No connection$crlf");
+		logandprint ("- No connection${crlf}");
 	}
 
 
@@ -243,14 +297,14 @@ sub socket_connect {
 # - called when disconnection was detected
 sub handle_client_disconnected 
 {
-	logandprint ("- Server Disconnected$crlf", "red");
+	logandprint ("- Server Disconnected${crlf}", "red");
 	client_disconnect();
 }
 
 # client_disconnect
 # - called when we want to initiate a disconnect
 sub client_disconnect {
-	logandprint ("- Closing connection.$crlf");
+	logandprint ("- Closing connection.${crlf}");
 	socket_disconnect();
 	$client_connected = 0;
 	$rcon_logged_in = 0;
@@ -285,7 +339,7 @@ sub check_client_connected {
 
 
 sub rcon_login {
-	logandprint ("- Sending RCON Password$crlf");
+	logandprint ("- Sending RCON Password${crlf}");
 	# RCON LOGIN
 	sleep 1;
 	sendauth ($rcon_password,"AUTH");
@@ -293,7 +347,7 @@ sub rcon_login {
 
 #stuff to do when we get authorized to rcon
 sub rcon_authorized {
-	logandprint ("- *RCON AUTHORIZED*$crlf","green");
+	logandprint ("- *RCON AUTHORIZED*${crlf}","green");
 	
 	$rcon_logged_in = 1;
 	sleep 1;
@@ -304,9 +358,9 @@ sub rcon_authorized {
 
 #stuff to do when we are refused by rcon
 sub rcon_not_authorized {
-	logandprint ("- *RCON -NOT- AUTHORIZED*$crlf","red");
+	logandprint ("- *RCON -NOT- AUTHORIZED*${crlf}","red");
 	socket_disconnect();
-	die "Bad password?$crlf";
+	die "Bad password?${crlf}";
 }
 
 # GET ANY INCOMING SOCKET DATA AND PROCESS IT
@@ -327,9 +381,9 @@ sub process_server_messages
 			$inbuffer = process_next_message_from_buffer ($inbuffer);
 			if ($originalbuffersize == length($inbuffer) )
 			{
-				logandprint ("dbg: (needs fixing) $originalbuffersize  buffer: $inbuffer\n");
-				logandprint (str2hex($inbuffer)."\n");
-				logandprint ("buffer not properly processed, purging buffer\n");
+				logandprint ("dbg: (needs fixing) $originalbuffersize  buffer: $inbuffer${crlf}");
+				logandprint (str2hex($inbuffer)."${crlf}");
+				logandprint ("buffer not properly processed, purging buffer${crlf}");
 				$inbuffer = "";
 			}
 		}
@@ -363,7 +417,7 @@ sub process_next_message_from_buffer {
 		if (length($message_buffer) == 0) {
 			return "";
 		}
-		print "not enough data yet (".length($message_buffer)." bytes : '$message_buffer'$crlf";
+		print "not enough data yet (".length($message_buffer)." bytes : '$message_buffer'${crlf}";
 		return $message_buffer;
 	}
 
@@ -383,7 +437,8 @@ sub process_next_message_from_buffer {
 	$packet_type = le32toint ($packet_type); 
 
 	if (length($message_buffer) < $packet_size + 4) {
-		debugprint ("WARNING: Not enough data yet$crlf");
+		debugprint ("WARNING: Not enough data yet, length=".length($message_buffer)." data=".str2hex($message_buffer)."${crlf}");
+		sleep 1;
 		return $message_buffer;
 	}
 
@@ -404,11 +459,15 @@ sub process_next_message_from_buffer {
 		}
 			
 		
-		debugprint ("Processing inbound packet: type: $packet_type (".str2hex(inttole32($packet_type)).") $packet_type_text  /  ID: $packet_id (". str2hex(inttole32($packet_id)).")${crlf}MESSAGE: " . str2hex($packet_text)."$crlf");
+		debugprint ("Processing inbound packet: type: $packet_type (".str2hex(inttole32($packet_type)).") $packet_type_text  /  ID: $packet_id (". str2hex(inttole32($packet_id)).")${crlf}MESSAGE: " . str2hex($packet_text)."${crlf}");
 	}
 
 	#Packet type 0 - Discard it
 	if ($packet_type == 0) {
+		if ($packet_id ne 0 && $packet_id ne 67305985)
+		{
+			$msgid_last_received = $packet_id;
+		}
 		# tends to be dupe messages
 		#process_incoming_text("---> $packet_text");
 	}
@@ -431,7 +490,7 @@ sub process_next_message_from_buffer {
 	}
 	else {
 		#this probably shouldn't happen unless its connected to something besides Rust
-		logandprint("*****************RCON CLIENT: Unhandled packet type: " . $packet_type . "$crlf","red");
+		logandprint("*****************RCON CLIENT: Unhandled packet type: " . $packet_type . "${crlf}","red");
 		logandprint(str2hex($packet_text," "),"red");
 		process_incoming_text($packet_text);
 	}		
@@ -441,31 +500,73 @@ sub process_next_message_from_buffer {
 }
 
 
-sub process_commandqueue {
+sub process_command_queue {
 	my $nextline = "";
 
 
-	while ($commandqueue[0] ne "")
+	while ($command_queue[0] ne "")
 	{
 
 		#make sure we are logged in, abort sending if we aren't
-		if ($rcon_logged_in == 0 ) {
-			logandprint ("- Delaying output queue, not logged in\n");
+		if ($rcon_logged_in == 0 ) 
+		{
+			logandprint ("- Delaying output queue, not logged in${crlf}");
 			return;
 		}
 
+
+		if ($msgid_last_sent != $msgid_last_received)
+		{
+			debugprint("Holding queue intil last sent item is acknowledged.  Sent=".$msgid_last_sent." Last Received=".$msgid_last_received."${crlf}");
+			$msgid_wait_counter++;
+			if ($msgid_wait_counter < $msgid_wait_max)
+			{
+				return;
+			}
+
+			#timed out, retransmit
+			else
+			{
+				
+				$msgid_retry_counter++;
+				$msgid_wait_counter = 0;
+				if ($msgid_retry_counter < $msgid_retry_max)
+				{
+					debugprint("Process_command_queue: Timeout waiting for response, retransmitting${crlf}");
+
+					sendcmd($msg_last_sent,$msgid_last_sent);
+				}
+				else
+				{
+					debugprint("Process_command_queue: Timeout waiting for response, max retries exceeded${crlf}");
+					server_disconnect();
+					return;
+				}			
+
+			}
+			
+		}
+		else
+		{
+			$msgid_wait_counter = 0;
+			$msgid_retry_counter = 0;
+		}
+
 		#send all items in the queue
-		if ($commandqueue[0] ne "") {
-			$nextline = shift(@commandqueue);
-			debugprint ("- Sending from queue: $nextline\n");
-			sendcmd($nextline);
-			#TODO: Verify command was properly received
+		if ($command_queue[0] ne "") 
+		{
+			$nextline = shift(@command_queue);
+			debugprint ("- Sending from queue: $nextline${crlf}");
+			$msgid_last_sent++;
+			sendcmd($nextline,$msgid_last_sent);
+			$msg_last_sent = $nextline;
 			return;
 		}
 	}
 
 	#todo: untested rig up
-	if ($exit_after_queue_processed == 1) {
+	if ($exit_after_queue_processed == 1)
+	{
 		sleep 2;
 		client_disconnect();
 		exit;
@@ -485,7 +586,7 @@ sub process_user_input
 		chomp ($user_input_buffer);
 
 		# queue the command for sending
-		push @commandqueue,$user_input_buffer;
+		push @command_queue,$user_input_buffer;
 
 		$user_input_buffer = "";
  	}
@@ -502,7 +603,7 @@ sub process_incoming_text {
 	$data =~ s/\x00//g;
 
 	#add a carriage return at the end
-	$data = $data . "$crlf";
+	$data = $data . "${crlf}";
 
 	#log the text
 	logdata($data);
@@ -557,7 +658,7 @@ sub process_incoming_text {
 	#anything else just print it
 	else 
 	{
-		#print "No match for: $data$crlf".str2hex($data)."$crlf";
+		#print "No match for: $data${crlf}".str2hex($data)."${crlf}";
 		printcolor ($data);
 	}
 }
@@ -588,17 +689,19 @@ sub logdata {
 # sendauth ($password)
 #   - sends authorization packet to the server
 sub sendauth {
-	sendcmd($_[0],"AUTH");
+	sendcmd($_[0],0,"AUTH");
 }
 
 
-# sendcmd ($command)
-# sendcmd ($command, ["AUTH" if auth packet)
+# sendcmd ($command), $packetid
+# sendcmd ($command, $packetid, ["AUTH" if auth packet)
 #   - sends a command to the server
 sub sendcmd {
-	my ($sendcmd) = $_[0];
+	my ($sendcmd) = shift;
+	my $packetid = shift;
+	my $parameters = shift;
 	my ($packet) = "";
-	$packet = makepacket ($sendcmd, $_[1]);
+	$packet = makepacket ($sendcmd, $packetid, $parameters);
 
 	# debugprint (str2hex($packet," ") ."${crlf}");
 
@@ -669,18 +772,24 @@ sub makepacket {
 	my ($packet_size);
 	my ($packet);
 	my ($packet_type);
+	my $packet_id;
 
-	$packet_cmd = $_[0];
+
+	$packet_cmd = shift;
+	$packet_id = shift;
+	
 	$packet_size = length($packet_cmd);
 
-	
-	if ($_[1] eq "AUTH") {
+		
+	if ($_[0] eq "AUTH") {
 		# auth packet
 		$packet_type = 3;
 	} else {
 		# otherwise command packet
 		$packet_type = 2;
 	}
+
+	debugprint("Makepacket: Forming packet type ${packet_type} id ${packet_id} text '${packet_cmd}'${crlf}");
 
 	# packet size = size of everything in the packet EXCEPT the packet size, so we add 4b for request id, 4b for request type, and 2b for the end terminators
 	$packet_size = length($packet_cmd)+10;
@@ -689,7 +798,8 @@ sub makepacket {
 	$packet = inttole32($packet_size);
 
 	# byte 4-7: request id, can be anything, but server response will have the same request ID
-	$packet .= chr(1) . chr(2) . chr(3) . chr(4);
+	#$packet .= chr(1) . chr(2) . chr(3) . chr(4);
+	$packet .= inttole32($packet_id);
 
 	# byte 8-11: request type (type 2 = normal command, type 3 = authorization request)
 	$packet .= chr($packet_type) . chr(0) . chr(0) . chr(0);

@@ -370,7 +370,7 @@ sub process_server_messages
 	# get any waiting data
 	$inbuffer .= readsocket($socket);
 
-	my $originalbuffersize = length($inbuffer);
+	my $originalbuffersize;
 
 	if ($inbuffer ne "")
 	{
@@ -378,16 +378,18 @@ sub process_server_messages
 		while (length($inbuffer) > 13)
 		{
 
+			$originalbuffersize=length($inbuffer);
 			$inbuffer = process_next_message_from_buffer ($inbuffer);
+			# if we didn't process anything, we didn't have enough data, exit for now
 			if ($originalbuffersize == length($inbuffer) )
 			{
-				logandprint ("dbg: (needs fixing) $originalbuffersize  buffer: $inbuffer${crlf}");
-				logandprint (str2hex($inbuffer)."${crlf}");
-				logandprint ("buffer not properly processed, purging buffer${crlf}");
-				$inbuffer = "";
+
+				debugprint("process_server_messages: Not enough data to form a packet, hoping for more later\n");
+				return; 
 			}
 		}
-	} else 
+	} 
+	else 
 	{
 		#no data
 	}
@@ -437,8 +439,8 @@ sub process_next_message_from_buffer {
 	$packet_type = le32toint ($packet_type); 
 
 	if (length($message_buffer) < $packet_size + 4) {
-		debugprint ("WARNING: Not enough data yet, length=".length($message_buffer)." data=".str2hex($message_buffer)."${crlf}");
-		sleep 1;
+
+		debugprint ("WARNING: Not enough data yet, data size=".length($message_buffer)." packet size=".($packet_size+4)." data=".str2hex($message_buffer)."${crlf}");
 		return $message_buffer;
 	}
 
@@ -459,7 +461,9 @@ sub process_next_message_from_buffer {
 		}
 			
 		
-		debugprint ("Processing inbound packet: type: $packet_type (".str2hex(inttole32($packet_type)).") $packet_type_text  /  ID: $packet_id (". str2hex(inttole32($packet_id)).")${crlf}MESSAGE: " . str2hex($packet_text)."${crlf}");
+		debugprint ("Processing inbound packet: Size=".(($packet_size)+4)." (".str2hex(inttole32(($packet_size)))."+4b) / ID: $packet_id (". str2hex(inttole32($packet_id)).") / type: $packet_type (".str2hex(inttole32($packet_type)).") $packet_type_text  (".length($leftoverdata)."b left in queue)${crlf}");
+		debugprint ("Data: " . str2hex(substr($message_buffer,0,$packet_size+2))."${crlf}");
+		#debugprint ("Message: " . str2hex($packet_text)."${crlf}");
 	}
 
 	#Packet type 0 - Discard it
@@ -517,7 +521,7 @@ sub process_command_queue {
 
 		if ($msgid_last_sent != $msgid_last_received)
 		{
-			debugprint("Holding queue intil last sent item is acknowledged.  Sent=".$msgid_last_sent." Last Received=".$msgid_last_received."${crlf}");
+			debugprint("Holding queue until last sent item is acknowledged.  Sent=".$msgid_last_sent." Last Received=".$msgid_last_received."${crlf}");
 			$msgid_wait_counter++;
 			if ($msgid_wait_counter < $msgid_wait_max)
 			{

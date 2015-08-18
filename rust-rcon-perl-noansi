@@ -78,7 +78,7 @@ my $packetid_last_sent = 0;
 my $packetid_last_received = 0;
 my $msgid_wait_counter = 0;
 my $msgid_retry_counter = 0;
-my $msgid_wait_max = 4;
+my $msgid_wait_max = 10;
 my $msgid_retry_max = 2;
 my $msg_last_sent="";
 
@@ -154,6 +154,10 @@ while (1)
 	# Get any data from the server and process it
 	process_server_messages();
 
+	# Sleep a quarter second
+	select(undef, undef, undef, 0.25);
+
+
 
 	# Deal with user inputs
 	if ($single_command_only == 0)
@@ -164,9 +168,6 @@ while (1)
 	# Process any queued outbound messages
 	process_command_queue();
 
-	# Sleep a quarter second
-	#select(undef, undef, undef, 0.25);
-
 	# Get any data from the server and process it
 	process_server_messages();
 
@@ -175,7 +176,6 @@ while (1)
 
 	# sleep one second
 	sleep 1;
-
 }
 
 
@@ -445,12 +445,12 @@ sub rcon_authorized
 	} else {
 		@command_queue = ($single_command);
 		debugprint("rcon_authorized: Queueing up single command (single_command_only)${crlf}");
-		sleep 1;
+		sleep 2;
 	}
 
 
 	$rcon_logged_in = 1;
-	sleep 1;
+	sleep 2;
 
 	# RCON GET STATUS
 	#sendcmd ("status");
@@ -575,6 +575,8 @@ sub process_incoming_packet
 		if ($packet_id ne 0 && $packet_id ne 67305985 && $packet_id == $packetid_last_sent)
 		{
 
+			debugprint ("process_incoming_packet: Sent command #$packet_id acknowledged ${crlf}");
+
 			$packetid_last_received = $packet_id;
 			if ($single_command_only == 1) 
 			{
@@ -608,7 +610,15 @@ sub process_incoming_packet
 	# if in single_command_only mode, dont display any other type of messages
 	elsif ($single_command_only == 1)
 	{
-		debugprint("Ignoring packet type ${packet_type}${crlf}");
+		if ($packet_text =~ /$msg_last_sent/) 
+		{
+			debugprint ("Considering this a match to sent text${crlf}");
+			$packetid_last_received = $packetid_last_sent;
+		}
+		else
+		{
+			debugprint("Ignoring as unmatched packet type ${packet_type}: ${packet_text}${crlf}");
+		}
 		return $leftoverdata;
 	}
 
@@ -616,6 +626,11 @@ sub process_incoming_packet
 	elsif ($packet_type == 4) 
 	{
 
+		if ($packet_text =~ /$msg_last_sent/) 
+		{
+			debugprint ("#2 Considering this a match to sent text${crlf}");
+			$packetid_last_received = $packetid_last_sent;
+		}
 		#process the current data however we want
 		process_incoming_text($packet_text);
 	}

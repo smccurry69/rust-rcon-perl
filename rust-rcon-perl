@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 #
-# rcon-perl v0.0d
-# 2015-08-14
+# rcon-perl v0.0e
+# 2015-08-17
 
 
 # TODO: passing filehandles
@@ -42,7 +42,8 @@ my $logfilename = "~/rust-rcon-perl.log";
 my $debug_enabled = 0;
 my $retry_timeout = 30;
 my $crlf = "\r\n";
-my @login_command_queue=("status", "players");
+my @login_command_queue=("status");
+#my @login_command_queue=();
 #my @login_command_queue=("status", "players", "server.saveinterval 1200");
 my $exit_after_queue_processed = 0;
 ################################################
@@ -99,13 +100,17 @@ my $nb_stdin = new IO::Select( *STDIN );
 my $socket; # socket handle
 my $logfilefh; #log file handle
 
+my $single_command_only = 0;		# flag, execute a single command and exit
+my $single_command = "";		# 	command for above
+my $suppress_status_messages = 0;	# flag, if enabled will disable connection status messages
+
 # make sure we have a hostname, etc
 load_config();
 
 
 if ($logging_enabled == 1) {
 	if (open $logfilefh, ">>", $logfilename) {
-		printcolor("- Started logging to $logfilename${crlf}");
+		statusprint("- Started logging to $logfilename${crlf}");
 	}
 	else {
 		$logging_enabled = 0;
@@ -145,13 +150,16 @@ while (1) {
 
 
 	# Deal with user inputs
-	process_user_input();
+	if ($single_command_only == 0)
+	{
+		process_user_input();
+	}
 
 	# Process any queued outbound messages
 	process_command_queue();
 
 	# Sleep a quarter second
-	select(undef, undef, undef, 0.25);
+	#select(undef, undef, undef, 0.25);
 
 	# Get any data from the server and process it
 	process_server_messages();
@@ -196,10 +204,29 @@ sub load_config
 			$logging_enabled = 1;
 			$logfilename = shift(@ARGV);
 		}
+		elsif ($line eq "-xq")
+		{
+			$logging_enabled = 0;
+			$ansi_enabled = 0;
+			$console_timestamp_enabled = 0;
+			$suppress_status_messages = 1;
+			$single_command_only = 1;
+			$single_command = shift (@ARGV);
+			
+		}
+		elsif ($line eq "-x")
+		{
+			$single_command_only = 1;
+			$single_command = shift (@ARGV);
+		}
 		elsif ($line eq "--debug")
 		{
 			print "Debug mode enabled${crlf}";
 			$debug_enabled = 1;
+		}
+		elsif ($line eq "-q")
+		{
+			$suppress_status_messages = 1;
 		}
 		elsif ($line eq "--ansi")
 		{
@@ -214,6 +241,14 @@ sub load_config
 		elsif ($line eq "--nologging")
 		{
 			$logging_enabled = 0;
+		}
+		elsif ($line eq "--no-console-timestamp")
+		{
+			$console_timestamp_enabled = 0;
+		}
+		elsif ($line eq "--console-timestamp")
+		{
+			$console_timestamp_enabled = 1;
 		}
 		else
 		{
@@ -249,12 +284,21 @@ sub display_command_line_help
 		print "-s servername${crlf}";
 		print "-p portname${crlf}";
 		print "-w password${crlf}";
-		print "-l logfilename${crlf}";
-		print "--nologging${crlf}";
-		print "--ansi${crlf}";
-		print "--no-ansi${crlf}";
-		print "--debug${crlf}";
+		print "-l logfilename$  - log to the specified filename${crlf}";
+		print "-x command       - execute a single rcon command and exit${crlf}";
+		print "-xq command      - -x, --nologging, --no-ansi, --no-console-timestamp, -q${crlf}";
+		print "--nologging      - disable logging${crlf}";
+		print "--ansi           - enable ansi color${crlf}";
+		print "--no-ansi        - disable ansi color${crlf}";
+		print "--debug          - enable debug output${crlf}";
+		print "-q               - disable connection status messages${crlf}";
+		print "--no-console-timestamp - disable console timestamp display${crlf}";
+		print "--console-timestamp - enable console timestamp display${crlf}";
 		print "${crlf}";
+		print "Example of interactive use:${crlf}";
+		print "  $0 -s 1.2.3.4 -p 5728 ${crlf}";
+		print "Example of transmitting a single command via rcon:${crlf}";
+		print "  $0 -s 1.2.3.4 -p 5728 -w mypass -xq 'server.save'${crlf}";
 		exit;
 }
 
@@ -277,7 +321,7 @@ sub client_connect {
 		$client_connected = check_client_connected();
 		if ($client_connected == 0)
 		{
-			logandprint( "- Connection failed.  Retrying in $retry_timeout seconds.${crlf}","red");
+			statusprint( "- Connection failed.  Retrying in $retry_timeout seconds.${crlf}","red");
 			sleep $retry_timeout;
 		}
 
@@ -287,12 +331,12 @@ sub client_connect {
 	$msgid_last_sent = 0;
 	$msgid_last_received = 0;
 
-	logandprint ("- Connection established${crlf}");
+	statusprint ("- Connection established${crlf}");
 }
 
 
 sub socket_connect {
-	logandprint ("- Opening connection to host '$host_ip' port '$host_port'.${crlf}");
+	statusprint ("- Opening connection to host '$host_ip' port '$host_port'.${crlf}");
 	 $socket = IO::Socket::INET->new(PeerAddr => $host_ip,
                                  PeerPort => $host_port,
                                  Proto    => 'tcp',
@@ -304,13 +348,13 @@ sub socket_connect {
 		$client_connected = 1;
 		return;
 	}
-	logandprint ("- Waiting on connection${crlf}");
+	statusprint ("- Waiting on connection${crlf}");
 	sleep 5;
 	if ($socket->connected) {
 		$client_connected = 1;
 		return;
 	} else {
-		logandprint ("- No connection${crlf}");
+		statusprint ("- No connection${crlf}");
 	}
 
 
@@ -320,14 +364,14 @@ sub socket_connect {
 # - called when disconnection was detected
 sub handle_client_disconnected 
 {
-	logandprint ("- Server Disconnected${crlf}", "red");
+	statusprint ("- Server Disconnected${crlf}", "red");
 	client_disconnect();
 }
 
 # client_disconnect
 # - called when we want to initiate a disconnect
 sub client_disconnect {
-	logandprint ("- Closing connection.${crlf}");
+	statusprint ("- Closing connection.${crlf}");
 	socket_disconnect();
 	$client_connected = 0;
 	$rcon_logged_in = 0;
@@ -362,7 +406,7 @@ sub check_client_connected {
 
 
 sub rcon_login {
-	logandprint ("- Sending RCON Password${crlf}");
+	statusprint ("- Sending RCON Password${crlf}");
 	# RCON LOGIN
 	sleep 1;
 	sendauth ($rcon_password,"AUTH");
@@ -370,12 +414,20 @@ sub rcon_login {
 
 #stuff to do when we get authorized to rcon
 sub rcon_authorized {
-	logandprint ("- *RCON AUTHORIZED*${crlf}","green");
+	statusprint ("- *RCON AUTHORIZED*${crlf}","green");
 
-	
-	@command_queue = (@command_queue, @login_command_queue);
-	debugprint("- Queueing up login commands${crlf}");
-	
+
+	if ($single_command_only == 0) 
+	{
+		@command_queue = (@command_queue, @login_command_queue);
+		debugprint("- Queueing up login commands: @command_queue${crlf}");
+	} else {
+		@command_queue = ($single_command);
+		debugprint("- Queueing up single command (single_command_only)${crlf}");
+		sleep 1;
+	}
+
+
 	$rcon_logged_in = 1;
 	sleep 1;
 
@@ -385,9 +437,9 @@ sub rcon_authorized {
 
 #stuff to do when we are refused by rcon
 sub rcon_not_authorized {
-	logandprint ("- *RCON -NOT- AUTHORIZED*${crlf}","red");
+	logandprint ("- RCON NOT AUTHORIZED - Bad password?${crlf}","red");
 	socket_disconnect();
-	die "Bad password?${crlf}";
+	exit;
 }
 
 # GET ANY INCOMING SOCKET DATA AND PROCESS IT
@@ -493,33 +545,58 @@ sub process_next_message_from_buffer {
 		#debugprint ("Message: " . str2hex($packet_text)."${crlf}");
 	}
 
-	#Packet type 0 - Discard it
+	#Packet type 0 - response packets.  only displaying this if its in single command only mode
+	# otherwise, we just record we got a response.  
 	if ($packet_type == 0) {
-		if ($packet_id ne 0 && $packet_id ne 67305985)
+		if ($packet_id ne 0 && $packet_id ne 67305985 && $packet_id == $msgid_last_sent)
 		{
+
 			$msgid_last_received = $packet_id;
+			if ($single_command_only == 1) 
+			{
+				logandprint("$packet_text$crlf");
+				statusprint("- Command executed successfully, exiting.${crlf}");
+				client_disconnect();
+				exit;
+			}
 		}
-		# tends to be dupe messages
-		#process_incoming_text("---> $packet_text");
+		else
+		{
+			debugprint("- Discarded packet id ${packet_id}${crlf}");
+		}
 	}
 
+
 	#Packet type 2 - Authorization Success
-	elsif ($packet_type == 2) {
-		if (str2hex(inttole32($packet_id)) eq "ffffffff" or $packet_id == 4294967295) {
+	elsif ($packet_type == 2) 
+	{
+		if (str2hex(inttole32($packet_id)) eq "ffffffff" or $packet_id == 4294967295) 
+		{
 			rcon_not_authorized();
 		}
-		else {
+		else 
+		{
 			rcon_authorized();
 		}
 	}
 
+
+	# if in single_command_only mode, dont display any other type of messages
+	elsif ($single_command_only == 1)
+	{
+		debugprint("Ignoring packet type ${packet_type}${crlf}");
+		return $leftoverdata;
+	}
+
 	#Packet type 4 - Display it
-	elsif ($packet_type == 4) {
+	elsif ($packet_type == 4) 
+	{
 
 		#process the current data however we want
 		process_incoming_text($packet_text);
 	}
-	else {
+	else 
+	{
 		#this probably shouldn't happen unless its connected to something besides Rust
 		logandprint("*****************RCON CLIENT: Unhandled packet type: " . $packet_type . "${crlf}","red");
 		logandprint(str2hex($packet_text," "),"red");
@@ -535,21 +612,21 @@ sub process_command_queue {
 	my $nextline = "";
 
 
-	if ($#command_queue > -1)
+	if ($#command_queue > -1 || $msgid_last_sent != $msgid_last_received)
 	{
 
 		#make sure we are logged in, abort sending if we aren't
 		if ($rcon_logged_in == 0 ) 
 		{
-			logandprint ("- Delaying output queue, not logged in${crlf}");
+			statusprint ("- Delaying output queue, not logged in${crlf}");
 			return;
 		}
 
 
 		if ($msgid_last_sent != $msgid_last_received)
 		{
-			debugprint("Holding queue until last sent item is acknowledged.  Sent=".$msgid_last_sent." Last Received=".$msgid_last_received."${crlf}");
 			$msgid_wait_counter++;
+			debugprint("Process_command_queue: Waiting for send acknowledged.  ${msgid_wait_counter}/${msgid_wait_max} Sent=".$msgid_last_sent." Last Received=".$msgid_last_received."${crlf}");
 			if ($msgid_wait_counter < $msgid_wait_max)
 			{
 				return;
@@ -571,7 +648,7 @@ sub process_command_queue {
 				else
 				{
 					debugprint("Process_command_queue: Timeout waiting for response, max retries exceeded${crlf}");
-					server_disconnect();
+					client_disconnect();
 					return;
 				}			
 
@@ -588,10 +665,10 @@ sub process_command_queue {
 		if ($#command_queue > -1) 
 		{
 			$nextline = shift(@command_queue);
-			debugprint ("- Sending from queue: $nextline${crlf}");
 			$msgid_last_sent++;
-			sendcmd($nextline,$msgid_last_sent);
 			$msg_last_sent = $nextline;
+			debugprint ("- Sending from queue packet id ${msgid_last_sent}: $nextline${crlf}");
+			sendcmd($nextline,$msgid_last_sent);
 			return;
 		}
 	}
@@ -717,6 +794,13 @@ sub logandprint {
 	printcolor ($data, $color);
 	logdata ($data);
 }
+
+sub statusprint {
+	if ($suppress_status_messages == 0)
+	{
+		logandprint(shift);
+	}
+}
 	
 sub logdata {
 	my $data = shift;
@@ -763,7 +847,7 @@ sub writesocket {
 	my $packet = $_[0];
 
 	if ($debug_enabled == 1) {
-		debugprint ("WRITESOCKET: " . str2hex($packet) . "${crlf}");
+		debugprint ("writesocket: transmitting " . str2hex($packet) . "${crlf}");
 	}
 
 	#print "WRITESOCKET: (".length($packet)." bytes) data: $packet hex: ".str2hex($packet," ")."${crlf}";
@@ -807,7 +891,7 @@ sub readsocket {
 
 		# if error is something else, assume we got a connection drop
 		$client_connected = 0;
-		logandprint ("- Connection dropped.${crlf}","red");
+		statusprint ("- Connection dropped.${crlf}","red");
 		handle_client_disconnected();
 		return "";
 	}

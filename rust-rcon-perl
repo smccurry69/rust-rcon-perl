@@ -122,21 +122,26 @@ if ($logging_enabled == 1) {
 
 
 # MAIN LOOP
-while (1) {
+while (1) 
+{
 
 	#if disconnected, connect
-	while ($client_connected == 0) {
+	while ($client_connected == 0) 
+	{
 		# start the connection
 		client_connect();
 		rcon_login();
 		$login_timer = 0;
 	}
 
-	if ($rcon_logged_in == 0) {
-		if ($login_timer < 20) {
+	if ($rcon_logged_in == 0) 
+	{
+		if ($login_timer < 20) 
+		{
 			$login_timer++;
 		}
-		else {
+		else 
+		{
 			$login_timer = 0;
 			logandprint("No login within time limit.  Retrying.${crlf}");
 			client_disconnect();
@@ -265,7 +270,8 @@ sub load_config
 		exit;
 	}
 
-	if ($rcon_password eq "") {
+	if ($rcon_password eq "") 
+	{
 		print "RCON Password:";
 		$rcon_password = <STDIN>;
 		chomp($rcon_password); #get rid of carriage return from input
@@ -280,7 +286,7 @@ sub load_config
 
 sub display_command_line_help
 {
-		print "Usage: $0 -s server -p portnumber${crlf}${crlf}";
+		print "${crlf}Usage: $0 -s server -p portnumber${crlf}${crlf}";
 		print "-s servername${crlf}";
 		print "-p portname${crlf}";
 		print "-w password${crlf}";
@@ -305,7 +311,8 @@ sub display_command_line_help
 
 #TODO: fix this to be more correct
 #expand any leading tilde or other cleanup here
-sub cleanupfilename {
+sub cleanupfilename 
+{
 	my $filename = shift;
 	my $username = getpwuid( $< );
 	#handle ~/
@@ -315,7 +322,8 @@ sub cleanupfilename {
 	return $filename;
 }
 		
-sub client_connect {
+sub client_connect 
+{
 	while ($client_connected == 0) {
 		socket_connect();
 		$client_connected = check_client_connected();
@@ -335,7 +343,8 @@ sub client_connect {
 }
 
 
-sub socket_connect {
+sub socket_connect 
+{
 	statusprint ("Opening connection to host '$host_ip' port '$host_port'.${crlf}");
 	 $socket = IO::Socket::INET->new(PeerAddr => $host_ip,
                                  PeerPort => $host_port,
@@ -370,7 +379,8 @@ sub handle_client_disconnected
 
 # client_disconnect
 # - called when we want to initiate a disconnect
-sub client_disconnect {
+sub client_disconnect 
+{
 	statusprint ("Closing connection.${crlf}");
 	socket_disconnect();
 	$client_connected = 0;
@@ -380,12 +390,14 @@ sub client_disconnect {
 
 
 
-sub socket_disconnect {
+sub socket_disconnect 
+{
 	shutdown($socket, 2) if $socket;
 	close($socket) if $socket;
 }
 
-sub check_client_connected {
+sub check_client_connected 
+{
 	my $sockhandle = $socket;
 	#my $byteswritten="";
 	#$byteswritten = syswrite ($sockhandle, "", 0);
@@ -405,7 +417,8 @@ sub check_client_connected {
 
 
 
-sub rcon_login {
+sub rcon_login 
+{
 	statusprint ("Sending RCON Password${crlf}");
 	# RCON LOGIN
 	sleep 1;
@@ -413,7 +426,8 @@ sub rcon_login {
 }
 
 #stuff to do when we get authorized to rcon
-sub rcon_authorized {
+sub rcon_authorized 
+{
 	statusprint ("RCON AUTHORIZED${crlf}","green");
 
 
@@ -436,7 +450,8 @@ sub rcon_authorized {
 }
 
 #stuff to do when we are refused by rcon
-sub rcon_not_authorized {
+sub rcon_not_authorized 
+{
 	logandprint ("- RCON NOT AUTHORIZED - Bad password?${crlf}","red");
 	socket_disconnect();
 	exit;
@@ -481,7 +496,8 @@ sub process_server_messages
 #
 # returns: remainder of unprocessed data
 #
-sub process_incoming_packet {
+sub process_incoming_packet 
+{
 	my $message_buffer = "";
 	my $packet_size = "";
 	my $packet_id = "";
@@ -547,7 +563,8 @@ sub process_incoming_packet {
 
 	#Packet type 0 - response packets.  only displaying this if its in single command only mode
 	# otherwise, we just record we got a response.  
-	if ($packet_type == 0) {
+	if ($packet_type == 0) 
+	{
 		if ($packet_id ne 0 && $packet_id ne 67305985 && $packet_id == $packetid_last_sent)
 		{
 
@@ -608,7 +625,8 @@ sub process_incoming_packet {
 }
 
 #send messages, wait for acknowledgement before going to the next
-sub process_command_queue {
+sub process_command_queue 
+{
 	my $nextline = "";
 
 
@@ -705,7 +723,8 @@ sub process_user_input
 
 # process_incoming_text ($text)
 #   - All incoming text to be displayed or otherwise parsed comes here
-sub process_incoming_text {
+sub process_incoming_text 
+{
 	my $data = $_[0];
 
 	#get rid of any null characters in the text.  sometimes there are some
@@ -792,21 +811,24 @@ sub process_timers
 
 }
 
-sub logandprint {
+sub logandprint 
+{
 	my $data = shift;
 	my $color = shift;
 	printcolor ($data, $color);
 	logdata ($data);
 }
 
-sub statusprint {
+sub statusprint 
+{
 	if ($suppress_status_messages == 0)
 	{
 		logandprint("- ".shift);
 	}
 }
 	
-sub logdata {
+sub logdata 
+{
 	my $data = shift;
 
 	if ($logging_enabled == 1) {
@@ -824,7 +846,8 @@ sub logdata {
 
 # sendauth ($password)
 #   - sends authorization packet to the server
-sub sendauth {
+sub sendauth 
+{
 	sendcmd($_[0],0,"AUTH");
 }
 
@@ -832,7 +855,8 @@ sub sendauth {
 # sendcmd ($command), $packetid
 # sendcmd ($command, $packetid, ["AUTH" if auth packet)
 #   - sends a command to the server
-sub sendcmd {
+sub sendcmd 
+{
 	my ($sendcmd) = shift;
 	my $packetid = shift;
 	my $parameters = shift;
@@ -846,7 +870,8 @@ sub sendcmd {
 
 # writesocket ($packet)
 #   - send the packet to the server
-sub writesocket {
+sub writesocket 
+{
 	my $sockhandle = $socket;
 	my $packet = $_[0];
 
@@ -861,7 +886,8 @@ sub writesocket {
 
 # $data = readsocket();
 #   - gets any data from the server and returns it
-sub readsocket {
+sub readsocket 
+{
 	my $sockhandle = $socket;
 	my $rb = "";
 	my $data = "";
@@ -869,27 +895,33 @@ sub readsocket {
 
 	$rb = sysread($sockhandle,$data,4096);
 
-	if (defined $rb) {
-		if ($rb > 0) {
+	if (defined $rb) 
+	{
+		if ($rb > 0) 
+		{
 			#if ($debug_enabled == 1) {
 			#	debugprint ("READSOCKET: got $rb bytes${crlf}READSOCKET TEXT: " . $data. "${crlf}READSOCKET HEX:" . str2hex($data) . "${crlf}");
 			#}
 			return $data;
 
 		}
-		else {
+		else 
+		{
 			#Probably disconnected
 			logandprint("-Remote Connection closed${crlf}","red");
 			handle_client_disconnected();
 			return "";
 			
 		}
-	} else {
+	} 
+	else 
+	{
 
 		# if error is just due to no data, that's fine
-		if ($! == EWOULDBLOCK) {
-		#no data
-		 return "";
+		if ($! == EWOULDBLOCK) 
+		{
+			#no data
+			return "";
 		}
 
 
@@ -903,7 +935,8 @@ sub readsocket {
 
 # Form a packet to be sent
 # makepacket (command, ["AUTH" if auth packet])
-sub makepacket {
+sub makepacket 
+{
 	my ($packet_cmd);
 	my ($packet_size);
 	my ($packet);
@@ -917,10 +950,13 @@ sub makepacket {
 	$packet_size = length($packet_cmd);
 
 		
-	if ($_[0] eq "AUTH") {
+	if ($_[0] eq "AUTH") 
+	{
 		# auth packet
 		$packet_type = 3;
-	} else {
+	} 
+	else 
+	{
 		# otherwise command packet
 		$packet_type = 2;
 	}
@@ -952,39 +988,47 @@ sub makepacket {
 }
 
 # Convert integer to 4 little endian bytes
-sub inttole32 {
+sub inttole32 
+{
 	my $data = $_[0];
 	my $returnvalue = "";
 	my $i1 = "";
-	if ($data ne 0) {
+	if ($data ne 0) 
+	{
 		$i1 = int($data/16777216);
 		$returnvalue = chr($i1); #byte 4
 		$data = $data - ($i1*16777216);
-		if ($data ne 0) {
+		if ($data ne 0) 
+		{
 			$i1 = int($data/65536);
 			$returnvalue = chr($i1) . $returnvalue; #byte 3
 			$data = $data - ($i1*65536);
-				if ($data ne 0) {
-					$i1 = int($data / 256);
-					$returnvalue = chr($i1) . $returnvalue; # byte 2
-					$data = $data - ($i1*256);
-					$returnvalue = chr ($data) . $returnvalue; #byte 1
-				}
-				else {
-					$returnvalue = chr(0) . chr (0) . $returnvalue;
-				}
+			if ($data ne 0) 
+			{
+				$i1 = int($data / 256);
+				$returnvalue = chr($i1) . $returnvalue; # byte 2
+				$data = $data - ($i1*256);
+				$returnvalue = chr ($data) . $returnvalue; #byte 1
+			}
+			else 
+			{
+				$returnvalue = chr(0) . chr (0) . $returnvalue;
+			}
 
 
 
 		}
-		else {
+		else 
+		{
 			$returnvalue = chr(0) . chr(0) . chr (0) . $returnvalue;
 		}
 	}
-	else {
+	else 
+	{
 		$returnvalue = chr(0) . chr(0) . chr(0) . chr(0);
 	}
-	if (length($returnvalue) != 4) {
+	if (length($returnvalue) != 4) 
+	{
 		print "inttole32 calculation failure: " . $_[0] . " -> " . str2hex($returnvalue) . "${crlf}";
 
 		print length($returnvalue)."${crlf}";

@@ -41,6 +41,7 @@ my $console_timestamp_enabled = 1;
 my $logfilename = "~/rust-rcon-perl.log";
 my $debug_enabled = 0;
 my $retry_timeout = 30;
+my $no_retries = 0;
 my $crlf = "\r\n";
 my @login_command_queue=("status");
 #my @login_command_queue=();
@@ -327,9 +328,15 @@ sub client_connect
 	while ($client_connected == 0) {
 		socket_connect();
 		$client_connected = check_client_connected();
+
 		if ($client_connected == 0)
 		{
 			statusprint( "Connection failed.  Retrying in $retry_timeout seconds.${crlf}","red");
+			if ($single_command_only == 1 || $no_retries == 1)
+			{
+				die "Connection failed due to timeout.${crlf}";
+			}
+			else { print"$single_command_only$crlf";}
 			sleep $retry_timeout;
 		}
 

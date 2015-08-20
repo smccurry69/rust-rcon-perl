@@ -32,7 +32,7 @@ my $rcon_password = "";
 # Other settings
 ################################################
 
-my $ansi_enabled = 0;
+my $ansi_enabled = 1;
 my $logging_enabled = 1;
 my $logging_timestamp_enabled = 1;
 my $console_timestamp_enabled = 1;
@@ -578,11 +578,12 @@ sub process_incoming_packet
 		{
 
 			debugprint ("process_incoming_packet: Sent command #$packet_id acknowledged ${crlf}");
-			logandprint("$packet_text$crlf");
+
 
 			$packetid_last_received = $packet_id;
 			if ($single_command_only == 1) 
 			{
+				logandprint("$packet_text$crlf");
 				single_command_acknowledged();
 			}
 		}

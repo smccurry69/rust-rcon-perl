@@ -1,7 +1,5 @@
 #!/usr/bin/perl
 #
-# rcon-perl v0.0f
-# 2015-08-18
 
 
 # TODO: passing filehandles
@@ -48,6 +46,10 @@ my @login_command_queue=("status");
 #my @login_command_queue=("status", "players", "server.saveinterval 1200");
 my $exit_after_queue_processed = 0;
 ################################################
+
+# rcon-perl v0.1a
+# 2015-08-18
+my $version = "0.1a";
 
 # colors
  my %ansi;
@@ -445,7 +447,7 @@ sub rcon_authorized
 	} else {
 		@command_queue = ("",$single_command);
 		debugprint("rcon_authorized: Queueing up single command (single_command_only)${crlf}");
-		sleep 2;
+		sleep 1;
 	}
 
 
@@ -612,7 +614,6 @@ sub process_incoming_packet
 		{
 			debugprint ("Considering this a match to sent text${crlf}");
 			$packetid_last_received = $packetid_last_sent;
-			single_command_acknowledged();
 		}
 		else
 		{
@@ -624,7 +625,6 @@ sub process_incoming_packet
 	#Packet type 4 - Display it
 	elsif ($packet_type == 4) 
 	{
-
 		if ($packet_text =~ /$msg_last_sent/) 
 		{
 			debugprint ("#2 Considering this a match to sent text${crlf}");
@@ -751,6 +751,8 @@ sub process_user_input
 		$user_input_buffer = <STDIN>;
 		chomp ($user_input_buffer);
 
+		$user_input_buffer = trimspecialcharacters($user_input_buffer);
+
 		# queue the command for sending
 		push @command_queue,$user_input_buffer;
 		debugprint("process_user_input: Adding '$user_input_buffer' to send queue.  (".$#command_queue." items ahead in queue)${crlf}");
@@ -765,6 +767,7 @@ sub process_user_input
 sub process_incoming_text 
 {
 	my $data = $_[0];
+	$data =~ s/\e//g; #trim escape characters
 
 	#get rid of any null characters in the text.  sometimes there are some
 	$data =~ s/\x00//g;
@@ -826,6 +829,11 @@ sub process_incoming_text
 	{
 		printcolor ($data, "hyellow");
 	}
+	elsif ($data =~ /^hostname\:/)
+	{
+		printcolor ($data, "white");
+		parse_server_info($data);
+	}
 	#anything else just print it
 	else 
 	{
@@ -864,6 +872,14 @@ sub statusprint
 	{
 		logandprint("- ".shift);
 	}
+}
+
+sub parse_server_info
+{
+	my $s_info = trimspecialcharacters(shift);
+	#s/$info/hostname\:(.*)/;
+	#print $_;
+	#print "xxx $1\n:;
 }
 	
 sub logdata 
@@ -1180,4 +1196,11 @@ sub printcolor
 
 	print $text . $ansi{'white'};
 
+}
+
+sub trimspecialcharacters
+{
+	my $line = shift;
+	$line =~ s/\e\[//g; #trim escape
+	return $line; #todo more
 }

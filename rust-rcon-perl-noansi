@@ -32,7 +32,6 @@ my $rcon_password = "";
 # Other settings
 ################################################
 
-my $ansi_enabled = 1;
 my $logging_enabled = 1;
 my $logging_timestamp_enabled = 1;
 my $console_timestamp_enabled = 1;
@@ -50,6 +49,16 @@ my $exit_after_queue_processed = 0;
 # rcon-perl v0.1a
 # 2015-08-18
 my $version = "0.1a";
+
+my $ansi_enabled = 1;
+if ($0 =~ /noansi/) 
+{
+	$ansi_enabled = 0;
+}
+else
+{
+	$ansi_enabled = 1;
+}
 
 # colors
  my %ansi;
@@ -871,7 +880,7 @@ sub statusprint
 {
 	if ($suppress_status_messages == 0)
 	{
-		logandprint("- ".shift);
+		logandprint("- ".shift,shift);
 	}
 }
 

@@ -46,9 +46,9 @@ my @login_command_queue=("status");
 my $exit_after_queue_processed = 0;
 ################################################
 
-# rcon-perl v0.1a
-# 2015-08-18
-my $version = "0.1a";
+# rcon-perl v0.1b
+# 2015-08-21
+my $version = "0.1b";
 
 my $ansi_enabled = 1;
 if ($0 =~ /noansi/) 
@@ -198,32 +198,38 @@ sub load_config
 	while ($#ARGV > -1) {
 		my $line=shift(@ARGV);
 
+		# help
 		if ($line eq "--help")
 		{
 			display_command_line_help();
 			die;
 		}
+		#servername
 		elsif ($line eq "-s") 
 		{
 			$host_ip = shift(@ARGV);
 		}
+		#port number
 		elsif ($line eq "-p") 
 		{ 
 			$host_port = shift(@ARGV);
 		}
-
+		#rcon password
 		elsif ($line eq "-w") 
 		{
 			$rcon_password = shift(@ARGV);
 		}
+		#log enable / log filename 
+		# -l xxxxxx
 		elsif ($line eq "-l")
 		{
 			$logging_enabled = 1;
 			$logfilename = shift(@ARGV);
 		}
+		#execute command (more quietly)
+		# -xq xxxxxx
 		elsif ($line eq "-xq")
 		{
-			$logging_enabled = 0;
 			$ansi_enabled = 0;
 			$console_timestamp_enabled = 0;
 			$suppress_status_messages = 1;
@@ -231,41 +237,55 @@ sub load_config
 			$single_command = shift (@ARGV);
 			
 		}
+		#execute command 
+		# -x xxxxxx
 		elsif ($line eq "-x")
 		{
 			$single_command_only = 1;
 			$single_command = shift (@ARGV);
 		}
+		#debug display on
 		elsif ($line eq "--debug")
 		{
 			print "Debug mode enabled${crlf}";
 			$debug_enabled = 1;
 		}
+		# quiet (no connection status display)
 		elsif ($line eq "-q")
 		{
 			$suppress_status_messages = 1;
 		}
+		# enable ansi
 		elsif ($line eq "--ansi")
 		{
-			print "ANSI on${crlf}";
+			
 			$ansi_enabled = 1;
+			statusprint ("ANSI on${crlf}");
 		}
+		# disable ansi
 		elsif ($line eq "--no-ansi")
 		{
-			print "ANSI off${crlf}";
 			$ansi_enabled = 0;
+			statusprint ("ANSI off${crlf}");
 		}
+		# force logging off
 		elsif ($line eq "--nologging")
 		{
 			$logging_enabled = 0;
 		}
+		# disable timestamps to console display
 		elsif ($line eq "--no-console-timestamp")
 		{
 			$console_timestamp_enabled = 0;
 		}
+		# enable timestamps to console display
 		elsif ($line eq "--console-timestamp")
 		{
 			$console_timestamp_enabled = 1;
+		}
+		elsif ($line eq "--version")
+		{
+			print "rust-rcon-perl $version\n";
 		}
 		else
 		{

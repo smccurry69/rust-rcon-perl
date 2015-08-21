@@ -32,7 +32,7 @@ my $rcon_password = "";
 # Other settings
 ################################################
 
-my $logging_enabled = 1;
+my $logging_enabled = 0;
 my $logging_timestamp_enabled = 1;
 my $console_timestamp_enabled = 1;
 my $logfilename = "~/rust-rcon-perl.log";
@@ -824,6 +824,10 @@ sub process_incoming_text
 		printcolor($data, "hgreen");
 	}		
 	elsif ($data =~ /^[0-9].*kicked\: Steam/) 
+	{
+		printcolor($data, "green");
+	}		
+	elsif ($data =~ /^[0-9].*kicked\: Unresponsive/) 
 	{
 		printcolor($data, "green");
 	}		

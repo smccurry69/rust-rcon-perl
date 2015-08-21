@@ -48,7 +48,7 @@ my $exit_after_queue_processed = 0;
 
 # rcon-perl v0.1b
 # 2015-08-21
-my $version = "0.1b";
+my $version = "0.1c";
 
 my $ansi_enabled = 1;
 if ($0 =~ /noansi/) 
@@ -610,10 +610,17 @@ sub process_incoming_packet
 
 
 			$packetid_last_received = $packet_id;
-			if ($single_command_only == 1) 
+			if ($single_command_only == 1)
 			{
-				logandprint("$packet_text$crlf");
-				single_command_acknowledged();
+				if ($packet_id > 1)
+				{
+					logandprint("$packet_text$crlf");
+					single_command_acknowledged();
+				}
+				else
+				{
+					debugprint ("Skipping filler packet, not printing\n");
+				}
 			}
 		}
 		else

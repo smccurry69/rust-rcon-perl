@@ -44,11 +44,12 @@ my @login_command_queue=("status");
 #my @login_command_queue=();
 #my @login_command_queue=("status", "players", "server.saveinterval 1200");
 my $exit_after_queue_processed = 0;
+my $exit_in_seconds = -1; # do not exit after countdown
 ################################################
 
-# rcon-perl v0.1b
+# rcon-perl v0.2
 # 2015-08-21
-my $version = "0.1c";
+my $version = "0.2";
 
 my $ansi_enabled = 1;
 if ($0 =~ /noansi/) 
@@ -93,9 +94,13 @@ my $msgid_wait_max = 10;
 my $msgid_retry_max = 2;
 my $msg_last_sent="";
 
+
+my $timer_enabled = 0;
+my $timer_seconds = 0;
 my $timer_minutes = 0;
 my $timer_hours = 0;
 my $timer_last_minute = getminute();
+my $timer_last_second = getsecond();
 
 # buffer flushing
 $| = 1;
@@ -545,6 +550,9 @@ sub process_incoming_packet
 	my $packet_text = "";
 	my $leftoverdata = "";
 
+	my $templine1;
+	my $templine2;
+
 	$message_buffer = $_[0];
 	# SEE IF WE HAVE TOO LITTLE DATA FOR A HEADER
 	if (length($message_buffer) < 12) 
@@ -647,14 +655,24 @@ sub process_incoming_packet
 	# if in single_command_only mode, dont display any other type of messages
 	elsif ($single_command_only == 1)
 	{
-		if ($packet_text =~ /$msg_last_sent/) 
+
+		$templine1 = trim_non_alphanumeric($packet_text);
+		$templine2 = trim_non_alphanumeric($msg_last_sent);
+
+		#print ( $templine1 . "$crlf");
+		#print ( $templine2 . "$crlf");
+
+
+		if ($templine1 =~ /$templine2/) 
 		{
-			debugprint ("Considering this a match to sent text${crlf}");
+			debugprint ("Considering this a match to sent text: '$packet_text' $crlf");
 			$packetid_last_received = $packetid_last_sent;
+			single_command_acknowledged();
 		}
 		else
 		{
 			debugprint("Ignoring as unmatched packet type ${packet_type}: ${packet_text}${crlf}");
+			debugprint ("Was trying to match '$msg_last_sent'$crlf");
 		}
 		return $leftoverdata;
 	}
@@ -693,9 +711,8 @@ sub single_command_acknowledged
 			else
 			{
 				debugprint ("Command Acknowledged.  All Commands finished sending\n");
-				statusprint("Command executed successfully, exiting.${crlf}");
-				client_disconnect();
-				exit;
+				debugprint("Command executed successfully, getting ready to exit.${crlf}");
+				$exit_in_seconds = 4;
 			}
 
 }
@@ -885,6 +902,35 @@ sub process_incoming_text
 
 sub process_timers
 {
+
+	if ($timer_enabled ==0 && $exit_in_seconds == -1)
+	{
+		debugprint("ignoring timers$crlf");
+		return;
+	}
+
+	debugprint("Running timers... $crlf");
+
+	if (getsecond() != $timer_last_second)
+	{
+		$timer_seconds ++;
+		#todo this is lazy and not necessarly correctly counting seconds
+		if ($exit_in_seconds > -1)
+		{
+			$exit_in_seconds--;
+			if ($exit_in_seconds > 0)
+			{
+				debugprint("Timer countdown complete.  Exiting.$crlf");
+				client_disconnect();
+				exit;
+			}
+		}
+
+	}
+
+
+
+			
 	if (getminute() != $timer_last_minute)
 	{
 		$timer_last_minute=getminute();
@@ -1186,6 +1232,13 @@ sub getminute
 	return $min;
 
 }
+sub getsecond
+{
+ 	my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+	return $sec;
+
+}
+
 sub rcon_timestamp 
 {
 
@@ -1237,6 +1290,14 @@ sub printcolor
 
 	print $text . $ansi{'white'};
 
+}
+
+sub trim_non_alphanumeric
+{
+	my $line = shift;
+	#$line =~ s/[\W_]//g;
+	$line =~ s/[^A-Z0-9 ]*//ig;
+	return $line;
 }
 
 sub trimspecialcharacters

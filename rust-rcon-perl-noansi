@@ -291,6 +291,7 @@ sub load_config
 		elsif ($line eq "--version")
 		{
 			print "rust-rcon-perl $version\n";
+			exit;
 		}
 		else
 		{

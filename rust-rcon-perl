@@ -60,6 +60,8 @@ else
 {
 	$ansi_enabled = 1;
 }
+my %playersonline;
+my %steamidhistory;
 
 # colors
  my %ansi;
@@ -120,6 +122,12 @@ my $logfilefh; #log file handle
 my $single_command_only = 0;		# flag, execute a single command and exit
 my @single_command_list = "";		# 	command for above
 my $suppress_status_messages = 0;	# flag, if enabled will disable connection status messages
+
+my $parsed_hostname = "";
+my $parsed_version = "";
+my $parsed_map = "";
+my $parsed_playercount = "";
+my $parsed_playerlist;
 
 # make sure we have a hostname, etc
 load_config();
@@ -812,12 +820,50 @@ sub process_user_input
 
 		$user_input_buffer = trimspecialcharacters($user_input_buffer);
 
+		#process any special internal commands.  if the input was cleared out of the buffer, dont send anything to the server
+		if ($user_input_buffer ne "")
+		{
+			$user_input_buffer = process_user_input_parse_special_commands($user_input_buffer);
+			if ($user_input_buffer eq "")
+			{
+				return;
+			}
+		}
+
 		# queue the command for sending
 		push @command_queue,$user_input_buffer;
 		debugprint("process_user_input: Adding '$user_input_buffer' to send queue.  (".$#command_queue." items ahead in queue)${crlf}");
 		$user_input_buffer = "";
  	}
 
+}
+
+sub process_user_input_parse_special_commands
+{
+	my $t_cmd = "";
+	my $t_text = shift;
+	if ($user_input_buffer =~ /^\.(.*)/)
+	{
+		$t_cmd = $1;
+		if ($t_cmd =~ /fake (.*)/)
+		{
+			print "Faking incoming text: $1\n";
+			process_incoming_text ($1);
+		}
+		elsif ($t_cmd eq "dbg")
+		{
+			special_command("dbg");
+		}
+		else
+		{	
+			return $t_text;
+		}
+	}
+	else
+	{
+		return $t_text;
+	}
+	return "";
 }
 
 
@@ -845,12 +891,6 @@ sub process_incoming_text
 
 	#log the text
 	logdata($data);
-
-	#if ($data =~ /ZDBG (.*)/)
-	#{
-	#	print "DBG: parsing new line: '$1'\n";
-	#	$data = $1."\n";
-	#}
 
 	# See if data starts with an IP address and port
 	#if ($data =~ /^([0-9.]*)/)
@@ -885,6 +925,8 @@ sub process_incoming_text
 			$t_action = "kicked";
 			$t_comments = $2;
 
+			special_logout_processing($t_ip, $t_port, $t_steamid, $t_username, $t_action, $t_comments);
+
 			#print "DBG: Kick of $t_username for '$t_comments'\n\n";
 			if ($t_comments eq "Steam Auth Timeout")
 			{
@@ -910,6 +952,7 @@ sub process_incoming_text
 		{
 			$t_username = $1;
 			$t_comments = $2;
+			special_logout_processing($t_ip, $t_port, $t_steamid, $t_username, $t_action, $t_comments);
 			printcolor ($data, "yellow");
 		}
 
@@ -918,6 +961,7 @@ sub process_incoming_text
 		{
 			$t_username = $1;
 			$t_comments = $2;
+			special_logout_processing($t_ip, $t_port, $t_steamid, $t_username, $t_action, $t_comments);
 			#print "DBG: disconnect by ip $t_ip port $t_port steamid $t_steamid player $t_username because $t_comments\n";
 			printcolor($data, "green");
 		}	
@@ -1035,13 +1079,6 @@ sub statusprint
 	}
 }
 
-sub parse_server_info
-{
-	my $s_info = trimspecialcharacters(shift);
-	#s/$info/hostname\:(.*)/;
-	#print $_;
-	#print "xxx $1\n:;
-}
 	
 sub logdata 
 {
@@ -1203,10 +1240,110 @@ sub makepacket
 	return ($packet);
 }
 
+my $parsed_hostname = "";
+my $parsed_version = "";
+my $parsed_map = "";
+my $parsed_playercount = "";
+my $parsed_playerlist;
+sub parse_server_info
+{
+	my $s_info = trimspecialcharacters(shift);
+	$s_info =~ /hostname\: ?(.*)/;
+	$parsed_hostname = $1;
+	$s_info =~ /version ?\: ([0-9]*)/;
+	$parsed_version = $1;
+	$s_info =~ /map *\: (.*)/;
+	$parsed_map = $1;
+	$s_info =~ /players *\: ([0-9]*)/;
+	$parsed_playercount = $1;
+
+	#remove everything between hostname and violation
+	$s_info =~ s/hostname.*violation//s;
+	while ($s_info =~ s/([0-9]+) +\"(.+?)\" *([0-9]*) *([0-9]*)s +.*//)
+	{
+		# $1 is steamid $2 is name $3 is ping $4 is seconds connected
+		clear_players_online();
+		add_player ($1, $2);
+
+	}
+	#print "Hostname = '$parsed_hostname', Version = $parsed_version, Map = $parsed_map, Playercount = $parsed_playercount\n";
+}
+
+sub special_command
+{
+	my $t_command = shift;
+	if ($t_command eq "dbg")
+	{
+		print "DBG: playercount = " . keys ( %playersonline) . "\n";
+		  foreach (sort keys %playersonline) {
+   			 print "$_ : $playersonline{$_}\n";
+  		  }
+	}
+	print "DBG: total players since watching = " . keys ( %steamidhistory) . "\n";
+		  foreach (sort keys %steamidhistory) {
+   			 print "$_ : $steamidhistory{$_}\n";
+  		  }
+	print "\n";
+
+}
+	
 #special_login_processing($t_ip, $t_port, $t_steamid, $t_username,$t_action, $t_comments);
 sub special_login_processing
 {
+	my $t_ip = shift;
+	my $t_port = shift;
+	my $t_steamid = shift;
+	my $t_username = shift;
+	my $t_action = shift;
+	my $t_comments = shift;
+
+	add_player ($t_steamid, $t_username);
+
 }
+
+sub clear_players_online()
+{
+		%playersonline=();
+}
+
+sub add_player ()
+{
+	my $t_steamid = shift;
+	my $t_username = shift;
+	if ($playersonline{$t_username} ne "")
+	{
+		if ($playersonline{$t_username} == $t_steamid)
+		{
+			printcolor ("DBG: PLAYER ALREADY RECORDED IN PLAYERLIST, SAME STEAM ID\n","yellow");
+		}
+		else
+		{
+			printcolor ("DBG: PLAYER ALREADY RECORDED IN PLAYERLIST, DIFFERENT STEAM ID\n","red");
+		}
+	}
+	else
+	{
+	}
+	$playersonline{$t_username} = $t_steamid;
+	$steamidhistory{$t_steamid} = $t_username;
+
+
+}
+
+
+#special_logout_processing($t_ip, $t_port, $t_steamid, $t_username, $t_action, $t_comments);
+sub special_logout_processing
+{
+	my $t_ip = shift;
+	my $t_port = shift;
+	my $t_steamid = shift;
+	my $t_username = shift;
+	my $t_action = shift;
+	my $t_comments = shift;
+
+	delete $playersonline{$t_username};
+}
+
 
 # Convert integer to 4 little endian bytes
 sub inttole32 

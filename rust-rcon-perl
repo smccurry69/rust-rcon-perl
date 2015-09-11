@@ -129,6 +129,9 @@ my $parsed_map = "";
 my $parsed_playercount = "";
 my $parsed_playerlist;
 
+my $dbgqueue = "";
+my $dbgflag1 = 0;
+
 # make sure we have a hostname, etc
 load_config();
 
@@ -831,11 +834,20 @@ sub process_user_input
 		}
 
 		# queue the command for sending
-		push @command_queue,$user_input_buffer;
-		debugprint("process_user_input: Adding '$user_input_buffer' to send queue.  (".$#command_queue." items ahead in queue)${crlf}");
+		send_queue_add($user_input_buffer);
 		$user_input_buffer = "";
  	}
 
+}
+
+sub send_queue_add
+{
+		my $t_line;
+		while ($t_line = shift)
+		{
+			push @command_queue,$t_line;
+			debugprint("process_user_input: Adding '$user_input_buffer' to send queue.  (".$#command_queue." items ahead in queue)${crlf}");
+		}
 }
 
 sub process_user_input_parse_special_commands
@@ -850,9 +862,38 @@ sub process_user_input_parse_special_commands
 			print "Faking incoming text: $1\n";
 			process_incoming_text ($1);
 		}
-		elsif ($t_cmd eq "dbg")
+		elsif ($t_cmd eq "dbgplayers")
 		{
-			special_command("dbg");
+			if ($dbgqueue)
+			{
+				print $dbgqueue . "\n";
+			}
+			$dbgqueue = "";
+	
+			print "DBG: playercount = " . keys ( %playersonline) . "\n";
+			  foreach (sort keys %playersonline) {
+	   			 print "$_ : $playersonline{$_}\n";
+	  		  }
+			print "DBG: total players since watching = " . keys ( %steamidhistory) . "\n";
+				  foreach (sort keys %steamidhistory) {
+		   			 print "$_ : $steamidhistory{$_}\n";
+		  		  }
+			print "\n";
+	
+		}
+		elsif ($t_cmd eq "help")
+		{
+			print ".fake text\n.dbgplayers\n.flag1on\n.flag1off\n";
+		}
+		elsif ($t_cmd eq "flag1on")
+		{
+			print "Flag 1 on\n";
+			$dbgflag1 = 1;
+		}
+		elsif ($t_cmd eq "flag1off")
+		{
+			print "Flag 1 off\n";
+			$dbgflag1 = 1;
 		}
 		else
 		{	
@@ -885,6 +926,10 @@ sub process_incoming_text
 
 	#get rid of any null characters in the text.  sometimes there are some
 	$data =~ s/\x00//g;
+
+	#get rid of final c/r
+	$data =~ s/\n$//;
+
 
 	#add a carriage return at the end
 	$data = $data . "${crlf}";
@@ -1259,35 +1304,19 @@ sub parse_server_info
 
 	#remove everything between hostname and violation
 	$s_info =~ s/hostname.*violation//s;
+	clear_players_online();
 	while ($s_info =~ s/([0-9]+) +\"(.+?)\" *([0-9]*) *([0-9]*)s +.*//)
 	{
 		# $1 is steamid $2 is name $3 is ping $4 is seconds connected
-		clear_players_online();
 		add_player ($1, $2);
 
 	}
 	#print "Hostname = '$parsed_hostname', Version = $parsed_version, Map = $parsed_map, Playercount = $parsed_playercount\n";
 }
 
-sub special_command
-{
-	my $t_command = shift;
-	if ($t_command eq "dbg")
-	{
-		print "DBG: playercount = " . keys ( %playersonline) . "\n";
-		  foreach (sort keys %playersonline) {
-   			 print "$_ : $playersonline{$_}\n";
-  		  }
-	}
-	print "DBG: total players since watching = " . keys ( %steamidhistory) . "\n";
-		  foreach (sort keys %steamidhistory) {
-   			 print "$_ : $steamidhistory{$_}\n";
-  		  }
-	print "\n";
-
-}
 	
 #special_login_processing($t_ip, $t_port, $t_steamid, $t_username,$t_action, $t_comments);
+# any recorded logins come here
 sub special_login_processing
 {
 	my $t_ip = shift;
@@ -1301,11 +1330,14 @@ sub special_login_processing
 
 }
 
+# clear the list of online players (probably called when status is run
 sub clear_players_online()
 {
 		%playersonline=();
 }
 
+# add_player (steamid, username)
+# any code to add logged in users here
 sub add_player ()
 {
 	my $t_steamid = shift;
@@ -1314,24 +1346,36 @@ sub add_player ()
 	{
 		if ($playersonline{$t_username} == $t_steamid)
 		{
-			printcolor ("DBG: PLAYER ALREADY RECORDED IN PLAYERLIST, SAME STEAM ID\n","yellow");
+			printcolor ("DBG: PLAYER $t_username ALREADY RECORDED IN PLAYERLIST, SAME STEAM ID\n","yellow");
 		}
 		else
 		{
-			printcolor ("DBG: PLAYER ALREADY RECORDED IN PLAYERLIST, DIFFERENT STEAM ID\n","red");
+			printcolor ("DBG: PLAYER $t_username ALREADY RECORDED IN PLAYERLIST, DIFFERENT STEAM ID\n","red");
 		}
 	}
 	else
 	{
 	}
+
+	if (! $steamidhistory{$t_steamid})
+	{
+		$dbgqueue .= localtime(time)." - New user $t_username\n";
+		if ($dbgflag1 == 1)
+		{
+			print "Running test code, event.run has been run\n";
+			send_queue_add ("event.run");
+		}
+	}
 	$playersonline{$t_username} = $t_steamid;
+	#print "DBG: addplayer $t_username - " . keys (%playersonline)."\n";
 	$steamidhistory{$t_steamid} = $t_username;
 
 
 }
 
 
-#special_logout_processing($t_ip, $t_port, $t_steamid, $t_username, $t_action, $t_comments);
+# special_logout_processing($t_ip, $t_port, $t_steamid, $t_username, $t_action, $t_comments);
+# any code to be run when users log out goes here
 sub special_logout_processing
 {
 	my $t_ip = shift;
@@ -1341,6 +1385,7 @@ sub special_logout_processing
 	my $t_action = shift;
 	my $t_comments = shift;
 
+	# remove from users logged in
 	delete $playersonline{$t_username};
 }
 

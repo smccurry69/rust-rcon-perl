@@ -1,1 +1,1387 @@
-rust-rcon-perl
+#!/usr/bin/perl
+#
+
+
+# TODO: passing filehandles
+# TODO: exit cleanly
+
+use strict;
+use Socket;
+use IO::Socket::INET;
+use POSIX qw(EWOULDBLOCK EINTR);
+#use Term::ReadKey;
+
+# for IO::Select stdin non blocking
+use IO::Handle;
+use IO::Select;
+
+
+################################################
+#
+# CONFIGURATION
+#
+# IP / Port and/or Password here if you want to hard code it
+#
+################################################
+
+my $host_ip = "";
+my $host_port = "";
+my $rcon_password = "";
+
+################################################
+# Other settings
+################################################
+
+my $logging_enabled = 0;
+my $logging_timestamp_enabled = 1;
+my $console_timestamp_enabled = 1;
+my $logfilename = "~/rust-rcon-perl.log";
+my $debug_enabled = 0;
+my $retry_timeout = 30;
+my $no_retries = 0;
+my $crlf = "\r\n";
+my @login_command_queue=("status");
+#my @login_command_queue=();
+#my @login_command_queue=("status", "players", "colliders", "server.secure false", "server.saveinterval 1200");
+my $exit_after_queue_processed = 0;
+my $exit_in_seconds = -1; # do not exit after countdown
+################################################
+
+# rcon-perl v0.2
+# 2015-08-21
+my $version = "0.2.1";
+
+my $ansi_enabled = 1;
+if ($0 =~ /noansi/) 
+{
+	$ansi_enabled = 0;
+}
+else
+{
+	$ansi_enabled = 1;
+}
+
+# colors
+ my %ansi;
+ $ansi{'left'}          ="\e[D";
+ $ansi{'reverse'}	="\e[7m";
+ $ansi{'normal'}	="\e[0m";
+ $ansi{'black'}		="\e[0;30m";
+ $ansi{'hblack'}	="\e[1;30m";
+ $ansi{'red'}		="\e[0;31m";
+ $ansi{'hred'}		="\e[1;31m";
+ $ansi{'green'}		="\e[0;32m";
+ $ansi{'hgreen'}	="\e[1;32m";
+ $ansi{'yellow'}	="\e[0;33m";
+ $ansi{'hyellow'}	="\e[1;33m";
+ $ansi{'blue'}		="\e[0;34m";
+ $ansi{'hblue'}		="\e[1;34m";
+ $ansi{'magenta'}	="\e[0;35m";
+ $ansi{'hmagenta'}	="\e[1;35m";
+ $ansi{'cyan'}		="\e[0;36m";
+ $ansi{'hcyan'}		="\e[1;36m";
+ $ansi{'white'}		="\e[0;37m";
+ $ansi{'hwhite'}	="\e[1;37m";
+
+
+# variables related to tracking the send queue
+my @command_queue;
+my $packetid_last_sent = 0;
+my $packetid_last_received = 0;
+my $msgid_wait_counter = 0;
+my $msgid_retry_counter = 0;
+my $msgid_wait_max = 10;
+my $msgid_retry_max = 2;
+my $msg_last_sent="";
+
+
+my $timer_enabled = 0;
+my $timer_seconds = 0;
+my $timer_minutes = 0;
+my $timer_hours = 0;
+my $timer_last_minute = getminute();
+my $timer_last_second = getsecond();
+
+# buffer flushing
+$| = 1;
+
+my $inbuffer = "";
+my $user_input_buffer = "";
+my $rcon_logged_in = 0;
+my $client_connected = 0;
+my $login_timer = 0; #timer for auth
+
+#nonblocking input handle
+my $nb_stdin = new IO::Select( *STDIN );
+
+my $socket; # socket handle
+my $logfilefh; #log file handle
+
+my $single_command_only = 0;		# flag, execute a single command and exit
+my @single_command_list = "";		# 	command for above
+my $suppress_status_messages = 0;	# flag, if enabled will disable connection status messages
+
+# make sure we have a hostname, etc
+load_config();
+
+
+if ($logging_enabled == 1) {
+	if (open $logfilefh, ">>", $logfilename) {
+		statusprint("Started logging to $logfilename${crlf}");
+	}
+	else {
+		$logging_enabled = 0;
+		printcolor("- Failed to open '$logfilename' for append.  Logging disabled.${crlf}","red");
+	}
+}
+
+
+
+
+# MAIN LOOP
+while (1) 
+{
+
+	#if disconnected, connect
+	while ($client_connected == 0) 
+	{
+		# start the connection
+		client_connect();
+		rcon_login();
+		$login_timer = 0;
+	}
+
+	if ($rcon_logged_in == 0) 
+	{
+		if ($login_timer < 20) 
+		{
+			$login_timer++;
+		}
+		else 
+		{
+			$login_timer = 0;
+			logandprint("No login within time limit.  Retrying.${crlf}");
+			client_disconnect();
+			sleep 2;
+		}
+	}
+
+
+	# Get any data from the server and process it
+	process_server_messages();
+
+	# Sleep a quarter second
+	select(undef, undef, undef, 0.25);
+
+
+
+	# Deal with user inputs
+	if ($single_command_only == 0)
+	{
+		process_user_input();
+	}
+
+	# Process any queued outbound messages
+	process_command_queue();
+
+	# Get any data from the server and process it
+	process_server_messages();
+
+
+	process_timers();
+
+	# sleep one second
+	sleep 1;
+}
+
+
+
+sub load_config
+{
+	my $line;
+
+	while ($#ARGV > -1) {
+		my $line=shift(@ARGV);
+
+		# help
+		if ($line eq "--help")
+		{
+			display_command_line_help();
+			die;
+		}
+		#servername
+		elsif ($line eq "-s") 
+		{
+			$host_ip = shift(@ARGV);
+		}
+		#port number
+		elsif ($line eq "-p") 
+		{ 
+			$host_port = shift(@ARGV);
+		}
+		#rcon password
+		elsif ($line eq "-w") 
+		{
+			$rcon_password = shift(@ARGV);
+		}
+		#log enable / log filename 
+		# -l xxxxxx
+		elsif ($line eq "-l")
+		{
+			$logging_enabled = 1;
+			$logfilename = shift(@ARGV);
+		}
+		#execute command (more quietly)
+		# -xq xxxxxx
+		elsif ($line eq "-xq")
+		{
+			$ansi_enabled = 0;
+			$console_timestamp_enabled = 0;
+			$suppress_status_messages = 1;
+			$single_command_only = 1;
+			push(@single_command_list,shift (@ARGV));
+			
+		}
+		#execute command 
+		# -x xxxxxx
+		elsif ($line eq "-x")
+		{
+			$single_command_only = 1;
+			push(@single_command_list,shift (@ARGV));
+		}
+		#debug display on
+		elsif ($line eq "--debug")
+		{
+			print "Debug mode enabled${crlf}";
+			$debug_enabled = 1;
+		}
+		# quiet (no connection status display)
+		elsif ($line eq "--no-status")
+		{
+			$suppress_status_messages = 1;
+		}
+		# enable ansi
+		elsif ($line eq "--ansi")
+		{
+			
+			$ansi_enabled = 1;
+			statusprint ("ANSI on${crlf}");
+		}
+		# disable ansi
+		elsif ($line eq "--no-ansi")
+		{
+			$ansi_enabled = 0;
+			statusprint ("ANSI off${crlf}");
+		}
+		# force logging off
+		elsif ($line eq "--nologging")
+		{
+			$logging_enabled = 0;
+		}
+		# disable timestamps to console display
+		elsif ($line eq "--no-console-timestamp")
+		{
+			$console_timestamp_enabled = 0;
+		}
+		# enable timestamps to console display
+		elsif ($line eq "--console-timestamp")
+		{
+			$console_timestamp_enabled = 1;
+		}
+		elsif ($line eq "--version")
+		{
+			print "rust-rcon-perl $version\n";
+			exit;
+		}
+		else
+		{
+			print "Invalid option: $line${crlf}${crlf}";
+			display_command_line_help();
+		}
+
+
+	}
+
+	if ($host_ip eq "" || $host_port eq "") 
+	{
+		display_command_line_help();
+		exit;
+	}
+
+	if ($rcon_password eq "") 
+	{
+		print "RCON Password:";
+		$rcon_password = <STDIN>;
+		chomp($rcon_password); #get rid of carriage return from input
+	}
+
+	#expand any home directories ie ~ in $logfilename
+	$logfilename=cleanupfilename($logfilename);
+	
+
+}
+
+
+sub display_command_line_help
+{
+		print "${crlf}Usage: $0 -s server -p portnumber${crlf}${crlf}";
+		print "-s servername${crlf}";
+		print "-p portname${crlf}";
+		print "-w password${crlf}";
+		print "-l logfilename$  - log to the specified filename${crlf}";
+		print "-x command       - execute a single rcon command and exit${crlf}";
+		print "-xq command      - -x, --no-ansi, --no-console-timestamp, --no-status${crlf}";
+		print "--nologging      - disable logging${crlf}";
+		print "--ansi           - enable ansi color${crlf}";
+		print "--no-ansi        - disable ansi color${crlf}";
+		print "--debug          - enable debug output${crlf}";
+		print "--no-status      - disable connection status messages${crlf}";
+		print "--no-console-timestamp - disable console timestamp display${crlf}";
+		print "--console-timestamp - enable console timestamp display${crlf}";
+		print "${crlf}";
+		print "Example of interactive use:${crlf}";
+		print "  $0 -s 1.2.3.4 -p 5728 ${crlf}";
+		print "Example of transmitting a single command via rcon:${crlf}";
+		print "  $0 -s 1.2.3.4 -p 5728 -w mypass -xq 'server.save'${crlf}";
+		exit;
+}
+
+
+#TODO: fix this to be more correct
+#expand any leading tilde or other cleanup here
+sub cleanupfilename 
+{
+	my $filename = shift;
+	my $username = getpwuid( $< );
+	#handle ~/
+	$filename =~ s/^~\//\/home\/$username\//;
+	#handle ~username/
+	$filename =~ s/^~([^\/]*)/\/home\/$1/;
+	return $filename;
+}
+		
+sub client_connect 
+{
+	while ($client_connected == 0) {
+		socket_connect();
+		$client_connected = check_client_connected();
+
+		if ($client_connected == 0)
+		{
+			statusprint( "Connection failed.  Retrying in $retry_timeout seconds.${crlf}","red");
+			if ($single_command_only == 1 || $no_retries == 1)
+			{
+				die "Connection failed due to timeout.${crlf}";
+			}
+			else { print"$single_command_only$crlf";}
+			sleep $retry_timeout;
+		}
+
+	}
+	debugprint ("Client connected, clearing flags rcon_logged_in, and counters packetid_last_sent, packetid_last_received${crlf}");
+	$rcon_logged_in = 0;
+	$packetid_last_sent = 0;
+	$packetid_last_received = 0;
+
+	statusprint ("Connection established${crlf}");
+}
+
+
+sub socket_connect 
+{
+	statusprint ("Opening connection to host '$host_ip' port '$host_port'.${crlf}");
+	 $socket = IO::Socket::INET->new(PeerAddr => $host_ip,
+                                 PeerPort => $host_port,
+                                 Proto    => 'tcp',
+				 Blocking => 0)
+	 or die "Can't start the connection.${crlf}";
+
+	# Sleep a quarter second
+	select(undef, undef, undef, 0.25);
+
+	if ($socket->connected) {
+		$client_connected = 1;
+		return;
+	}
+	statusprint ("Waiting on connection${crlf}");
+	sleep 5;
+	if ($socket->connected) {
+		$client_connected = 1;
+		return;
+	} else {
+		statusprint ("No connection${crlf}");
+	}
+
+
+}
+
+# server_disconnected
+# - called when disconnection was detected
+sub handle_client_disconnected 
+{
+	statusprint ("Server Disconnected${crlf}", "red");
+	client_disconnect();
+}
+
+# client_disconnect
+# - called when we want to initiate a disconnect
+sub client_disconnect 
+{
+	statusprint ("Closing connection.${crlf}");
+	socket_disconnect();
+	$client_connected = 0;
+	$rcon_logged_in = 0;
+}
+
+
+
+
+sub socket_disconnect 
+{
+	shutdown($socket, 2) if $socket;
+	close($socket) if $socket;
+}
+
+sub check_client_connected 
+{
+	my $sockhandle = $socket;
+	#my $byteswritten="";
+	#$byteswritten = syswrite ($sockhandle, "", 0);
+	#if (defined $byteswritten) {
+#		print "false";
+#		return 0;
+#	}
+#	else {
+#		print "true";
+#		return 1;
+#	}
+	if ($sockhandle->connected) {
+		return 1;
+	}
+	return 0;
+}
+
+
+
+sub rcon_login 
+{
+	statusprint ("Sending RCON Password${crlf}");
+	# RCON LOGIN
+	#sleep 1;
+	sendauth ($rcon_password,"AUTH");
+}
+
+#stuff to do when we get authorized to rcon
+sub rcon_authorized 
+{
+	statusprint ("RCON AUTHORIZED${crlf}","green");
+
+
+	if ($single_command_only == 0) 
+	{
+		@command_queue = ("", @command_queue, @login_command_queue);
+		#@command_queue = (@command_queue, @login_command_queue);
+		debugprint("rcon_authorized: Queueing up login commands: @command_queue${crlf}");
+	} else {
+		@command_queue = ("",@single_command_list);
+		#@command_queue = (@single_command_list);
+		debugprint("rcon_authorized: Queueing up single command (single_command_only)${crlf}");
+		#sleep 1;
+	}
+
+
+	$rcon_logged_in = 1;
+	#sleep 2;
+
+	# RCON GET STATUS
+	#sendcmd ("status");
+}
+
+#stuff to do when we are refused by rcon
+sub rcon_not_authorized 
+{
+	logandprint ("- RCON NOT AUTHORIZED - Bad password?${crlf}","red");
+	socket_disconnect();
+	exit;
+}
+
+# GET ANY INCOMING SOCKET DATA AND PROCESS IT
+sub process_server_messages 
+{
+
+	# get any waiting data
+	$inbuffer .= readsocket($socket);
+
+	my $originalbuffersize;
+
+	if ($inbuffer ne "")
+	{
+		# PARSE AND PROCESS INCOMING DATA, unprocessed data is returned back to us
+		while (length($inbuffer) > 13)
+		{
+
+			$originalbuffersize=length($inbuffer);
+			$inbuffer = process_incoming_packet ($inbuffer);
+			# if we didn't process anything, we didn't have enough data, exit for now
+			if ($originalbuffersize == length($inbuffer) )
+			{
+
+				debugprint("process_server_messages: Not enough data to form a packet, hoping for more later\n");
+				return; 
+			}
+		}
+	} 
+	else 
+	{
+		#no data
+	}
+}
+
+# PROCESS NEXT PACKET
+# Pull the next message, out of the buffer, return the rest of the buffer back to the caller
+# 
+# $remainderbuffer = process_incoming_packet ($buffer)
+#
+# returns: remainder of unprocessed data
+#
+sub process_incoming_packet 
+{
+	my $message_buffer = "";
+	my $packet_size = "";
+	my $packet_id = "";
+	my $packet_type = "";
+	my $packet_type_text = "";
+	my $buffer_body = "";
+	my $packet_text = "";
+	my $leftoverdata = "";
+
+	my $templine1;
+	my $templine2;
+
+	$message_buffer = $_[0];
+	# SEE IF WE HAVE TOO LITTLE DATA FOR A HEADER
+	if (length($message_buffer) < 12) 
+	{
+		if (length($message_buffer) == 0) {
+			return "";
+		}
+		print "not enough data yet (".length($message_buffer)." bytes : '$message_buffer'${crlf}";
+		return $message_buffer;
+	}
+
+
+
+	#get header details
+	# 4 bytes size (not including size)
+	# 4 bytes ID
+	# 4 bytes packet type
+	$packet_size = substr($message_buffer,0,4);
+	$packet_id = substr($message_buffer,4,4);
+	$packet_type = substr($message_buffer,8,4);
+
+	#convert header data to usable numbers
+	$packet_size = le32toint($packet_size);
+	$packet_id = le32toint ($packet_id);
+	$packet_type = le32toint ($packet_type); 
+
+	if (length($message_buffer) < $packet_size + 4) {
+
+		debugprint ("WARNING: Not enough data yet, data size=".length($message_buffer)." packet size=".($packet_size+4)." data=".str2hex($message_buffer)."${crlf}");
+		return $message_buffer;
+	}
+
+	$packet_text = substr($message_buffer,10,$packet_size-8);
+
+	$leftoverdata= substr($message_buffer,$packet_size+4,length($message_buffer)-($packet_size+4));
+
+
+	if ($debug_enabled == 1) {
+		if ($packet_type == 4) {
+			$packet_type_text = "MSG";
+		} elsif ($packet_type == 2) {
+			$packet_type_text = "AUTH";
+		} elsif ($packet_type == 0) {
+			$packet_type_text = "RESPONSE";
+		} else {
+			$packet_type_text = "UNKNOWN";
+		}
+			
+		
+		debugprint ("process_incoming_packet: Size=".(($packet_size)+4)." (".str2hex(inttole32(($packet_size)))."+4b) / ID: $packet_id (". str2hex(inttole32($packet_id)).") / type: $packet_type-".${packet_type_text}." (".str2hex(inttole32($packet_type)).")  (".length($leftoverdata)."b left in queue)${crlf}");
+		debugprint ("process_incoming_packet: Data: " . str2hex(substr($message_buffer,0,$packet_size+2))."${crlf}");
+		#debugprint ("Message: " . str2hex($packet_text)."${crlf}");
+	}
+
+	#Packet type 0 - response packets.  only displaying this if its in single command only mode
+	# otherwise, we just record we got a response.  
+	if ($packet_type == 0) 
+	{
+		if ($packet_id ne 0 && $packet_id ne 67305985 && $packet_id == $packetid_last_sent)
+		{
+
+			debugprint ("process_incoming_packet: Sent command #$packet_id acknowledged ${crlf}");
+
+
+			$packetid_last_received = $packet_id;
+			if ($single_command_only == 1)
+			{
+				if ($packet_id > 1)
+				{
+					logandprint("$packet_text$crlf");
+					single_command_acknowledged();
+				}
+				else
+				{
+					debugprint ("Skipping filler packet, not printing\n");
+				}
+			}
+		}
+		else
+		{
+			debugprint("- Discarded packet id ${packet_id}${crlf}");
+		}
+	}
+
+
+	#Packet type 2 - Authorization Success
+	elsif ($packet_type == 2) 
+	{
+		if (str2hex(inttole32($packet_id)) eq "ffffffff" or $packet_id == 4294967295) 
+		{
+			rcon_not_authorized();
+		}
+		else 
+		{
+			rcon_authorized();
+		}
+	}
+
+
+	# if in single_command_only mode, dont display any other type of messages
+	elsif ($single_command_only == 1)
+	{
+
+		$templine1 = trim_non_alphanumeric($packet_text);
+		$templine2 = trim_non_alphanumeric($msg_last_sent);
+
+		#print ( $templine1 . "$crlf");
+		#print ( $templine2 . "$crlf");
+
+
+		if ($templine1 =~ /$templine2/) 
+		{
+			debugprint ("Considering this a match to sent text: '$packet_text' $crlf");
+			$packetid_last_received = $packetid_last_sent;
+			single_command_acknowledged();
+		}
+		else
+		{
+			debugprint("Ignoring as unmatched packet type ${packet_type}: ${packet_text}${crlf}");
+			debugprint ("Was trying to match '$msg_last_sent'$crlf");
+		}
+		return $leftoverdata;
+	}
+
+	#Packet type 4 - Display it
+	elsif ($packet_type == 4) 
+	{
+		if ($packet_text =~ /$msg_last_sent/) 
+		{
+			debugprint ("#2 Considering this a match to sent text${crlf}");
+			$packetid_last_received = $packetid_last_sent;
+		}
+		#process the current data however we want
+		process_incoming_text($packet_text);
+	}
+	else 
+	{
+		#this probably shouldn't happen unless its connected to something besides Rust
+		logandprint("*****************RCON CLIENT: Unhandled packet type: " . $packet_type . "${crlf}","red");
+		logandprint(str2hex($packet_text," "),"red");
+		process_incoming_text($packet_text);
+	}		
+
+	#return the extra data so it can be processed later
+	return $leftoverdata;
+}
+
+
+sub single_command_acknowledged
+{
+
+
+			if ($#command_queue > -1) {
+				debugprint ("Command Acknowledged.  Waiting to execute next command\n");
+			}	
+			else
+			{
+				debugprint ("Command Acknowledged.  All Commands finished sending\n");
+				debugprint("Command executed successfully, getting ready to exit.${crlf}");
+				$exit_in_seconds = 4;
+			}
+
+}
+#send messages, wait for acknowledgement before going to the next
+sub process_command_queue 
+{
+	my $nextline = "";
+
+
+	if ($#command_queue > -1 || $packetid_last_sent != $packetid_last_received)
+	{
+
+		#make sure we are logged in, abort sending if we aren't
+		if ($rcon_logged_in == 0 ) 
+		{
+			statusprint ("Delaying output queue, not logged in${crlf}");
+			return;
+		}
+
+
+		if ($packetid_last_sent != $packetid_last_received)
+		{
+			$msgid_wait_counter++;
+			debugprint("process_command_queue: Waiting for sent command '$msg_last_sent' to be acknowledged.  ${msgid_wait_counter}/${msgid_wait_max} Sent=".$packetid_last_sent." Last Received=".$packetid_last_received."${crlf}");
+			if ($msgid_wait_counter < $msgid_wait_max)
+			{
+				return;
+			}
+
+			#timed out, retransmit
+			else
+			{
+				
+				$msgid_retry_counter++;
+				$msgid_wait_counter = 0;
+				if ($msgid_retry_counter < $msgid_retry_max)
+				{
+					debugprint("Process_command_queue: Timeout waiting for response, retransmitting${crlf}");
+
+					sendcmd($msg_last_sent,$packetid_last_sent);
+					return;
+				}
+				else
+				{
+					debugprint("Process_command_queue: Timeout waiting for response, max retries exceeded${crlf}");
+					statusprint("Failed to get acknowledgement for sent command.  Reconnecting.\n");
+					client_disconnect();
+					return;
+				}			
+
+			}
+			
+		}
+		else
+		{
+			$msgid_wait_counter = 0;
+			$msgid_retry_counter = 0;
+		}
+
+		#send all items in the queue
+		if ($#command_queue > -1) 
+		{
+			$nextline = shift(@command_queue);
+			$packetid_last_sent++;
+			$msg_last_sent = $nextline;
+			debugprint ("process_command_queue: Sending from queue packet id ${packetid_last_sent}: $nextline${crlf}");
+			sendcmd($nextline,$packetid_last_sent);
+			return;
+		}
+	}
+
+	#todo: untested rig up
+	if ($exit_after_queue_processed == 1)
+	{
+		#sleep 2;
+		client_disconnect();
+		exit;
+	}
+}
+
+		
+# process_user_input ()
+# - See if we have anything to send from the user
+sub process_user_input
+{
+
+	# Nonblocking input check
+	if ( $nb_stdin -> can_read(0) )
+	{
+		$user_input_buffer = <STDIN>;
+		chomp ($user_input_buffer);
+
+		$user_input_buffer = trimspecialcharacters($user_input_buffer);
+
+		# queue the command for sending
+		push @command_queue,$user_input_buffer;
+		debugprint("process_user_input: Adding '$user_input_buffer' to send queue.  (".$#command_queue." items ahead in queue)${crlf}");
+		$user_input_buffer = "";
+ 	}
+
+}
+
+
+# process_incoming_text ($text)
+#   - All incoming text to be displayed or otherwise parsed comes here
+sub process_incoming_text 
+{
+
+	my $t_ip = "";
+	my $t_port = "";
+	my $t_steamid = "";
+	my $t_username = "";
+	my $t_action = "";
+	my $t_comments = "";
+	my $t_remainder = "";
+
+	my $data = $_[0];
+	$data =~ s/\e//g; #trim escape characters
+
+	#get rid of any null characters in the text.  sometimes there are some
+	$data =~ s/\x00//g;
+
+	#add a carriage return at the end
+	$data = $data . "${crlf}";
+
+	#log the text
+	logdata($data);
+
+	#if ($data =~ /ZDBG (.*)/)
+	#{
+	#	print "DBG: parsing new line: '$1'\n";
+	#	$data = $1."\n";
+	#}
+
+	# See if data starts with an IP address and port
+	#if ($data =~ /^([0-9.]*)/)
+	# examples:
+	# 1.2.3.4:1234/76561198145420693/HelloUser kicked: EAC: unconnected
+	# 174.70.70.42:65280/76561198150448139/Bobsmith joined [windows/76561198150448139]
+	# 98.193.131.30:33345/76561198048495994/Blabla Saint disconnecting: disconnect
+	if ($data =~ /^([0-9.]{7,15})\:([0-9]*)\/([0-9]*)\/(.*)/)
+	{
+		#printcolor ("DBG: IP address $1 port $2 steamid $3 remainder $4 \n","hblue");
+		#temp fields: $t_ip,$t_port;$t_steamid;$t_username;$t_action;$t_comments;$t_remainder
+		$t_ip = $1;
+		$t_port = $2;
+		$t_steamid = $3;
+		$t_remainder = $4;
+		$t_remainder =~ s/[\r\n]//g; #remove c/r from remainder
+
+		# joined messages
+		if ($t_remainder =~ /(.*) joined \[(.*)\//) 
+		{
+			#print "DBG: username $1 os $2\n";
+			$t_username = $1;
+			$t_comments = $2;  #os in this case
+			$t_action = "joined";
+			special_login_processing($t_ip, $t_port, $t_steamid, $t_username,$t_action, $t_comments);
+			printcolor($data, "hgreen");
+		}
+		# kicked messages
+		elsif ($t_remainder =~ /(.*) kicked\: (.*)/)
+		{
+			$t_username = $1;
+			$t_action = "kicked";
+			$t_comments = $2;
+
+			#print "DBG: Kick of $t_username for '$t_comments'\n\n";
+			if ($t_comments eq "Steam Auth Timeout")
+			{
+				printcolor($data, "yellow");
+			}		
+			elsif ($t_comments eq "Unresponsive") 
+			{	
+				printcolor($data, "green");
+			}
+			elsif ($t_comments eq "EAC: unconnected") 
+			{
+				#print "DBG: EAC\n";
+				printcolor($data, "yellow");
+			}
+			else
+			{
+				#print "DBG: other reason '$t_comments'\n";
+				printcolor ($data, "yellow");
+			}
+		}
+		# Rejecting connection
+		elsif ($t_remainder =~ /(.*) Rejecting connection \- (.*)/)
+		{
+			$t_username = $1;
+			$t_comments = $2;
+			printcolor ($data, "yellow");
+		}
+
+		# disconnect messages
+		elsif ($t_remainder =~ /(.*) disconnecting\: {0,1}(.*)/) 
+		{
+			$t_username = $1;
+			$t_comments = $2;
+			#print "DBG: disconnect by ip $t_ip port $t_port steamid $t_steamid player $t_username because $t_comments\n";
+			printcolor($data, "green");
+		}	
+		else
+		{
+			#anything else we didn't know how to handle
+			printcolor ($data, "hblue");
+		}
+	}
+	#lines starting with [RCON]
+	elsif ($data =~ /^\[RCON\]/)
+	{
+		printcolor($data, "hwhite");
+	}
+	#lines starting with [Oxide]
+	elsif ($data =~ /^\[Oxide\]/) 
+	{
+		if ($data =~ /\[Error/) 
+		{
+			printcolor($data, "red");
+		}
+		elsif ($data =~ /\[Debug/) 
+		{
+			printcolor($data, "red");
+		}
+		else
+		{
+			printcolor ($data, "white");
+		}
+	}
+	elsif ($data =~ /^\[CHAT\]/) 
+	{
+		printcolor ($data,"hcyan");
+	}
+	elsif ($data =~ /was killed by/) 
+	{
+		printcolor($data, "yellow");
+	}
+
+	elsif ($data =~ /^TimeWarning:/) 
+	{
+		printcolor ($data, "hyellow");
+	}
+	elsif ($data =~ /^hostname\:/)
+	{
+		printcolor ($data, "white");
+		parse_server_info($data);
+	}
+	#anything else just print it
+	else 
+	{
+		#print "No match for: $data${crlf}".str2hex($data)."${crlf}";
+		printcolor ($data);
+	}
+}
+
+sub process_timers
+{
+
+	if ($timer_enabled ==0 && $exit_in_seconds == -1)
+	{
+		debugprint("ignoring timers$crlf");
+		return;
+	}
+
+	debugprint("Running timers... $crlf");
+
+	if (getsecond() != $timer_last_second)
+	{
+		$timer_seconds ++;
+		#todo this is lazy and not necessarly correctly counting seconds
+		if ($exit_in_seconds > -1)
+		{
+			$exit_in_seconds--;
+			if ($exit_in_seconds > 0)
+			{
+				debugprint("Timer countdown complete.  Exiting.$crlf");
+				client_disconnect();
+				exit;
+			}
+		}
+
+	}
+
+
+
+			
+	if (getminute() != $timer_last_minute)
+	{
+		$timer_last_minute=getminute();
+		$timer_minutes++;
+		debugprint ("process_timers: TICK  ".$timer_hours." hours ".$timer_minutes." minutes ${crlf}");
+	}
+	if ($timer_minutes == 60)
+	{
+		$timer_hours++;
+		$timer_minutes=0;
+	}
+
+}
+
+sub logandprint 
+{
+	my $data = shift;
+	my $color = shift;
+	printcolor ($data, $color);
+	logdata ($data);
+}
+
+sub statusprint 
+{
+	if ($suppress_status_messages == 0)
+	{
+		logandprint("- ".shift,shift);
+	}
+}
+
+sub parse_server_info
+{
+	my $s_info = trimspecialcharacters(shift);
+	#s/$info/hostname\:(.*)/;
+	#print $_;
+	#print "xxx $1\n:;
+}
+	
+sub logdata 
+{
+	my $data = shift;
+
+	if ($logging_enabled == 1) {
+		if ($logging_timestamp_enabled == 1) {
+			print $logfilefh rcon_timestamp() . "$data";
+		}
+		else
+		{
+			print $logfilefh "$data";
+		}
+
+		$logfilefh->flush;
+	}
+}
+
+# sendauth ($password)
+#   - sends authorization packet to the server
+sub sendauth 
+{
+	sendcmd($_[0],0,"AUTH");
+}
+
+
+# sendcmd ($command), $packetid
+# sendcmd ($command, $packetid, ["AUTH" if auth packet)
+#   - sends a command to the server
+sub sendcmd 
+{
+	my ($sendcmd) = shift;
+	my $packetid = shift;
+	my $parameters = shift;
+	my ($packet) = "";
+	$packet = makepacket ($sendcmd, $packetid, $parameters);
+
+	# debugprint (str2hex($packet," ") ."${crlf}");
+
+	writesocket ($packet)
+}
+
+# writesocket ($packet)
+#   - send the packet to the server
+sub writesocket 
+{
+	my $sockhandle = $socket;
+	my $packet = $_[0];
+
+	if ($debug_enabled == 1) {
+		debugprint ("writesocket: transmitting " . str2hex($packet) . "${crlf}");
+	}
+
+	#print "WRITESOCKET: (".length($packet)." bytes) data: $packet hex: ".str2hex($packet," ")."${crlf}";
+	syswrite ($sockhandle, $packet, length($packet));
+	$sockhandle->flush;
+}
+
+# $data = readsocket();
+#   - gets any data from the server and returns it
+sub readsocket 
+{
+	my $sockhandle = $socket;
+	my $rb = "";
+	my $data = "";
+	my $bytelen = "";
+
+	$rb = sysread($sockhandle,$data,4096);
+
+	if (defined $rb) 
+	{
+		if ($rb > 0) 
+		{
+			#if ($debug_enabled == 1) {
+			#	debugprint ("READSOCKET: got $rb bytes${crlf}READSOCKET TEXT: " . $data. "${crlf}READSOCKET HEX:" . str2hex($data) . "${crlf}");
+			#}
+			return $data;
+
+		}
+		else 
+		{
+			#Probably disconnected
+			logandprint("-Remote Connection closed${crlf}","red");
+			handle_client_disconnected();
+			return "";
+			
+		}
+	} 
+	else 
+	{
+
+		# if error is just due to no data, that's fine
+		if ($! == EWOULDBLOCK) 
+		{
+			#no data
+			return "";
+		}
+
+
+		# if error is something else, assume we got a connection drop
+		$client_connected = 0;
+		statusprint ("Connection dropped.${crlf}","red");
+		handle_client_disconnected();
+		return "";
+	}
+}
+
+# Form a packet to be sent
+# makepacket (command, ["AUTH" if auth packet])
+sub makepacket 
+{
+	my ($packet_cmd);
+	my ($packet_size);
+	my ($packet);
+	my ($packet_type);
+	my $packet_id;
+
+
+	$packet_cmd = shift;
+	$packet_id = shift;
+	
+	$packet_size = length($packet_cmd);
+
+		
+	if ($_[0] eq "AUTH") 
+	{
+		# auth packet
+		$packet_type = 3;
+	} 
+	else 
+	{
+		# otherwise command packet
+		$packet_type = 2;
+	}
+
+	debugprint("makepacket: Forming packet id ${packet_id} type ${packet_type} text '${packet_cmd}'${crlf}");
+
+	# packet size = size of everything in the packet EXCEPT the packet size, so we add 4b for request id, 4b for request type, and 2b for the end terminators
+	$packet_size = length($packet_cmd)+10;
+
+	# byte 0-3: packet size
+	$packet = inttole32($packet_size);
+
+	# byte 4-7: request id, can be anything, but server response will have the same request ID
+	#$packet .= chr(1) . chr(2) . chr(3) . chr(4);
+	$packet .= inttole32($packet_id);
+
+	# byte 8-11: request type (type 2 = normal command, type 3 = authorization request)
+	$packet .= chr($packet_type) . chr(0) . chr(0) . chr(0);
+
+	# bytes 12 thru ?? - message
+	$packet .= $packet_cmd;
+
+	# double nulls for terminator
+	$packet .= chr(0);
+	$packet .= chr(0);
+
+	# send back the 
+	return ($packet);
+}
+
+#special_login_processing($t_ip, $t_port, $t_steamid, $t_username,$t_action, $t_comments);
+sub special_login_processing
+{
+}
+
+# Convert integer to 4 little endian bytes
+sub inttole32 
+{
+	my $data = $_[0];
+	my $returnvalue = "";
+	my $i1 = "";
+	if ($data ne 0) 
+	{
+		$i1 = int($data/16777216);
+		$returnvalue = chr($i1); #byte 4
+		$data = $data - ($i1*16777216);
+		if ($data ne 0) 
+		{
+			$i1 = int($data/65536);
+			$returnvalue = chr($i1) . $returnvalue; #byte 3
+			$data = $data - ($i1*65536);
+			if ($data ne 0) 
+			{
+				$i1 = int($data / 256);
+				$returnvalue = chr($i1) . $returnvalue; # byte 2
+				$data = $data - ($i1*256);
+				$returnvalue = chr ($data) . $returnvalue; #byte 1
+			}
+			else 
+			{
+				$returnvalue = chr(0) . chr (0) . $returnvalue;
+			}
+
+
+
+		}
+		else 
+		{
+			$returnvalue = chr(0) . chr(0) . chr (0) . $returnvalue;
+		}
+	}
+	else 
+	{
+		$returnvalue = chr(0) . chr(0) . chr(0) . chr(0);
+	}
+	if (length($returnvalue) != 4) 
+	{
+		print "inttole32 calculation failure: " . $_[0] . " -> " . str2hex($returnvalue) . "${crlf}";
+
+		print length($returnvalue)."${crlf}";
+		die;
+	}
+	#debugprint ("inttole32: " . $_[0] . " -> " . str2hex($returnvalue) . "${crlf}");
+	return $returnvalue;
+}
+
+# Convert 4 little endian bytes to an integer
+sub le32toint 
+{
+	my $data = $_[0];
+	my $returnvalue = 0;
+	$returnvalue = ord(substr($data,0,1)) + ord(substr ($data,1,1)) * 256 + ord(substr ($data,2,1)) * 65536 + ord(substr ($data,3,1)) * 16777216;
+	return $returnvalue;
+}
+
+
+
+# CONVERT STRING TO HEX
+sub str2hex 
+{
+	my $string = "";
+	my $char = "";
+	my $hex = "";
+	my $returnstring="";
+	my $separator = "";
+	$string = $_[0];
+	
+	if (defined $_[1]) 
+	{
+		$separator = $_[1];
+	}
+
+	foreach $char (split //, $string) 
+	{
+		$hex = sprintf("%x", ord($char));
+		if (length($hex) == 1) 
+		{
+			$hex = "0" . $hex;
+		}
+		$returnstring .= $hex . $separator;
+	}
+	return $returnstring;
+}
+
+sub debugprint 
+{
+	if ($debug_enabled == 1) 
+	{
+		logandprint ("* $_[0]","reverse");
+	}
+}
+
+sub getminute
+{
+ 	my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+	return $min;
+
+}
+sub getsecond
+{
+ 	my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+	return $sec;
+
+}
+
+sub rcon_timestamp 
+{
+
+ my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+    return sprintf ( "%04d-%02d-%02d %02d:%02d:%02d: ",
+                                   $year+1900,$mon+1,$mday,$hour,$min,$sec);
+
+}
+
+# printcolor (text, [color])
+sub printcolor 
+{
+	my $text = shift;
+	my $color = shift;
+
+	#handle color off (print optional timestamp, and text
+	if ($ansi_enabled == 0) 
+	{
+		#only adding the timestamp now if no color
+		if ($console_timestamp_enabled == 1) 
+		{
+			$text = rcon_timestamp() . $text;
+		}
+		print $text;
+		return;
+	}
+
+
+	elsif ($color ne "") 
+	{
+		if ($ansi{$color} eq "") 
+		{
+			print "Color not defined '$color'${crlf}";
+		}
+
+		$text = $ansi{$color} . $text;
+
+	}
+
+	#start by text clearing any reverse background, change to white
+	$text = $ansi{'white'} . $text;
+
+
+	
+	if ($console_timestamp_enabled == 1) 
+	{
+		$text = $ansi{'white'}.rcon_timestamp() . $text;
+	}
+
+	print $text . $ansi{'white'};
+
+}
+
+sub trim_non_alphanumeric
+{
+	my $line = shift;
+	#$line =~ s/[\W_]//g;
+	$line =~ s/[^A-Z0-9 ]*//ig;
+	return $line;
+}
+
+sub trimspecialcharacters
+{
+	my $line = shift;
+	$line =~ s/\e\[//g; #trim escape
+	return $line; #todo more
+}

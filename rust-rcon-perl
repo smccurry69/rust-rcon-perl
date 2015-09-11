@@ -1203,6 +1203,11 @@ sub makepacket
 	return ($packet);
 }
 
+#special_login_processing($t_ip, $t_port, $t_steamid, $t_username,$t_action, $t_comments);
+sub special_login_processing
+{
+}
+
 # Convert integer to 4 little endian bytes
 sub inttole32 
 {

@@ -42,7 +42,7 @@ my $no_retries = 0;
 my $crlf = "\r\n";
 my @login_command_queue=("status");
 #my @login_command_queue=();
-#my @login_command_queue=("status", "players", "server.saveinterval 1200");
+#my @login_command_queue=("status", "players", "colliders", "server.secure false", "server.saveinterval 1200");
 my $exit_after_queue_processed = 0;
 my $exit_in_seconds = -1; # do not exit after countdown
 ################################################
@@ -118,7 +118,7 @@ my $socket; # socket handle
 my $logfilefh; #log file handle
 
 my $single_command_only = 0;		# flag, execute a single command and exit
-my $single_command = "";		# 	command for above
+my @single_command_list = "";		# 	command for above
 my $suppress_status_messages = 0;	# flag, if enabled will disable connection status messages
 
 # make sure we have a hostname, etc
@@ -162,7 +162,7 @@ while (1)
 			$login_timer = 0;
 			logandprint("No login within time limit.  Retrying.${crlf}");
 			client_disconnect();
-			sleep 1;
+			sleep 2;
 		}
 	}
 
@@ -239,7 +239,7 @@ sub load_config
 			$console_timestamp_enabled = 0;
 			$suppress_status_messages = 1;
 			$single_command_only = 1;
-			$single_command = shift (@ARGV);
+			push(@single_command_list,shift (@ARGV));
 			
 		}
 		#execute command 
@@ -247,7 +247,7 @@ sub load_config
 		elsif ($line eq "-x")
 		{
 			$single_command_only = 1;
-			$single_command = shift (@ARGV);
+			push(@single_command_list,shift (@ARGV));
 		}
 		#debug display on
 		elsif ($line eq "--debug")
@@ -396,7 +396,9 @@ sub socket_connect
 				 Blocking => 0)
 	 or die "Can't start the connection.${crlf}";
 
-	sleep 1;
+	# Sleep a quarter second
+	select(undef, undef, undef, 0.25);
+
 	if ($socket->connected) {
 		$client_connected = 1;
 		return;
@@ -478,9 +480,11 @@ sub rcon_authorized
 	if ($single_command_only == 0) 
 	{
 		@command_queue = ("", @command_queue, @login_command_queue);
+		#@command_queue = (@command_queue, @login_command_queue);
 		debugprint("rcon_authorized: Queueing up login commands: @command_queue${crlf}");
 	} else {
-		@command_queue = ("",$single_command);
+		@command_queue = ("",@single_command_list);
+		#@command_queue = (@single_command_list);
 		debugprint("rcon_authorized: Queueing up single command (single_command_only)${crlf}");
 		#sleep 1;
 	}
@@ -788,7 +792,7 @@ sub process_command_queue
 	#todo: untested rig up
 	if ($exit_after_queue_processed == 1)
 	{
-		sleep 2;
+		#sleep 2;
 		client_disconnect();
 		exit;
 	}
@@ -821,6 +825,15 @@ sub process_user_input
 #   - All incoming text to be displayed or otherwise parsed comes here
 sub process_incoming_text 
 {
+
+	my $t_ip = "";
+	my $t_port = "";
+	my $t_steamid = "";
+	my $t_username = "";
+	my $t_action = "";
+	my $t_comments = "";
+	my $t_remainder = "";
+
 	my $data = $_[0];
 	$data =~ s/\e//g; #trim escape characters
 
@@ -833,8 +846,89 @@ sub process_incoming_text
 	#log the text
 	logdata($data);
 
+	#if ($data =~ /ZDBG (.*)/)
+	#{
+	#	print "DBG: parsing new line: '$1'\n";
+	#	$data = $1."\n";
+	#}
+
+	# See if data starts with an IP address and port
+	#if ($data =~ /^([0-9.]*)/)
+	# examples:
+	# 1.2.3.4:1234/76561198145420693/HelloUser kicked: EAC: unconnected
+	# 174.70.70.42:65280/76561198150448139/Bobsmith joined [windows/76561198150448139]
+	# 98.193.131.30:33345/76561198048495994/Blabla Saint disconnecting: disconnect
+	if ($data =~ /^([0-9.]{7,15})\:([0-9]*)\/([0-9]*)\/(.*)/)
+	{
+		#printcolor ("DBG: IP address $1 port $2 steamid $3 remainder $4 \n","hblue");
+		#temp fields: $t_ip,$t_port;$t_steamid;$t_username;$t_action;$t_comments;$t_remainder
+		$t_ip = $1;
+		$t_port = $2;
+		$t_steamid = $3;
+		$t_remainder = $4;
+		$t_remainder =~ s/[\r\n]//g; #remove c/r from remainder
+
+		# joined messages
+		if ($t_remainder =~ /(.*) joined \[(.*)\//) 
+		{
+			#print "DBG: username $1 os $2\n";
+			$t_username = $1;
+			$t_comments = $2;  #os in this case
+			$t_action = "joined";
+			special_login_processing($t_ip, $t_port, $t_steamid, $t_username,$t_action, $t_comments);
+			printcolor($data, "hgreen");
+		}
+		# kicked messages
+		elsif ($t_remainder =~ /(.*) kicked\: (.*)/)
+		{
+			$t_username = $1;
+			$t_action = "kicked";
+			$t_comments = $2;
+
+			#print "DBG: Kick of $t_username for '$t_comments'\n\n";
+			if ($t_comments eq "Steam Auth Timeout")
+			{
+				printcolor($data, "yellow");
+			}		
+			elsif ($t_comments eq "Unresponsive") 
+			{	
+				printcolor($data, "green");
+			}
+			elsif ($t_comments eq "EAC: unconnected") 
+			{
+				#print "DBG: EAC\n";
+				printcolor($data, "yellow");
+			}
+			else
+			{
+				#print "DBG: other reason '$t_comments'\n";
+				printcolor ($data, "yellow");
+			}
+		}
+		# Rejecting connection
+		elsif ($t_remainder =~ /(.*) Rejecting connection \- (.*)/)
+		{
+			$t_username = $1;
+			$t_comments = $2;
+			printcolor ($data, "yellow");
+		}
+
+		# disconnect messages
+		elsif ($t_remainder =~ /(.*) disconnecting\: {0,1}(.*)/) 
+		{
+			$t_username = $1;
+			$t_comments = $2;
+			#print "DBG: disconnect by ip $t_ip port $t_port steamid $t_steamid player $t_username because $t_comments\n";
+			printcolor($data, "green");
+		}	
+		else
+		{
+			#anything else we didn't know how to handle
+			printcolor ($data, "hblue");
+		}
+	}
 	#lines starting with [RCON]
-	if ($data =~ /^\[RCON\]/)
+	elsif ($data =~ /^\[RCON\]/)
 	{
 		printcolor($data, "hwhite");
 	}
@@ -863,27 +957,6 @@ sub process_incoming_text
 		printcolor($data, "yellow");
 	}
 
-
-	elsif ($data =~ /^[0-9].*joined/) 
-	{
-		printcolor($data, "hgreen");
-	}		
-	elsif ($data =~ /^[0-9].*kicked\: Steam/) 
-	{
-		printcolor($data, "green");
-	}		
-	elsif ($data =~ /^[0-9].*kicked\: Unresponsive/) 
-	{
-		printcolor($data, "green");
-	}		
-	elsif ($data =~ /^[0-9].*disconnecting/) 
-	{
-		printcolor($data, "green");
-	}		
-	elsif ($data =~ /^[0-9].*kicked\: EAC\: unconnected/) 
-	{
-		printcolor($data, "yellow");
-	}		
 	elsif ($data =~ /^TimeWarning:/) 
 	{
 		printcolor ($data, "hyellow");

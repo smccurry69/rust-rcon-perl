@@ -385,7 +385,7 @@ sub client_connect
 			$connect_retries_count++;
 
 			
-			if ($single_command_only == 1 || ($connect_retries_count => $connect_retries_maxcount && $connect_retries_maxcount > -1))
+			if ($single_command_only == 1 || ($connect_retries_count >= $connect_retries_maxcount && $connect_retries_maxcount > -1))
 			{
 				die "Connection failed due to timeout.${crlf}";
 			}

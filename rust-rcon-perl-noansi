@@ -37,8 +37,9 @@ my $logging_timestamp_enabled = 1;
 my $console_timestamp_enabled = 1;
 my $logfilename = "~/rust-rcon-perl.log";
 my $debug_enabled = 0;
-my $retry_timeout = 30;
-my $no_retries = 0;
+my $connect_retry_timeout = 30;
+my $connect_retries_maxcount = -1;
+my $connect_retries_count = 0;
 my $crlf = "\r\n";
 my @login_command_queue=("status");
 #my @login_command_queue=();
@@ -373,22 +374,39 @@ sub cleanupfilename
 		
 sub client_connect 
 {
+	my $tempstring = "";
+
 	while ($client_connected == 0) {
 		socket_connect();
 		$client_connected = check_client_connected();
 
 		if ($client_connected == 0)
 		{
-			statusprint( "Connection failed.  Retrying in $retry_timeout seconds.${crlf}","red");
-			if ($single_command_only == 1 || $no_retries == 1)
+			$connect_retries_count++;
+
+			
+			if ($single_command_only == 1 || ($connect_retries_count => $connect_retries_maxcount && $connect_retries_maxcount > -1))
 			{
 				die "Connection failed due to timeout.${crlf}";
 			}
-			else { print"$single_command_only$crlf";}
-			sleep $retry_timeout;
+			else {
+
+				if ($connect_retries_maxcount > -1)
+				{
+					$tempstring = "${connect_retries_count}/${connect_retries_maxcount} ";
+				}
+				else
+				{
+					$tempstring = "";
+				}
+
+				statusprint( "Connection failed.  Retrying in $connect_retry_timeout seconds. $tempstring${crlf}","red");
+			}
+			sleep $connect_retry_timeout;
 		}
 
 	}
+	$connect_retries_count = 0;
 	debugprint ("Client connected, clearing flags rcon_logged_in, and counters packetid_last_sent, packetid_last_received${crlf}");
 	$rcon_logged_in = 0;
 	$packetid_last_sent = 0;

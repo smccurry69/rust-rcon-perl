@@ -38,6 +38,7 @@ my $console_timestamp_enabled = 1;
 my $logfilename = "~/rust-rcon-perl.log";
 my $debug_enabled = 0;
 my $connect_retry_timeout = 30;
+my $connect_retry_timer = 0;
 my $connect_retries_maxcount = -1;
 my $connect_retries_count = 0;
 my $crlf = "\r\n";
@@ -46,11 +47,12 @@ my @login_command_queue=("status");
 #my @login_command_queue=("status", "players", "colliders", "server.secure false", "server.saveinterval 1200");
 my $exit_after_queue_processed = 0;
 my $exit_in_seconds = -1; # do not exit after countdown
+my $config_display_type_zero = 0; #TBA - display type 0 messages
 ################################################
 
-# rcon-perl v0.2
-# 2015-08-21
-my $version = "0.2.1";
+# rcon-perl v0.2.2
+# 2015-10-15
+my $version = "0.2.2";
 
 my $ansi_enabled = 1;
 if ($0 =~ /noansi/) 
@@ -305,6 +307,15 @@ sub load_config
 			print "rust-rcon-perl $version\n";
 			exit;
 		}
+		elsif ($line eq "-mr")
+		{
+			$connect_retries_maxcount = shift (@ARGV);
+		}
+		# display type 0 messages.  undocumented, subject to change
+		elsif ($line eq "-dt0")
+		{
+			$config_display_type_zero = 1;
+		}
 		else
 		{
 			print "Invalid option: $line${crlf}${crlf}";
@@ -340,16 +351,17 @@ sub display_command_line_help
 		print "-s servername${crlf}";
 		print "-p portname${crlf}";
 		print "-w password${crlf}";
-		print "-l logfilename$  - log to the specified filename${crlf}";
-		print "-x command       - execute a single rcon command and exit${crlf}";
-		print "-xq command      - -x, --no-ansi, --no-console-timestamp, --no-status${crlf}";
-		print "--nologging      - disable logging${crlf}";
-		print "--ansi           - enable ansi color${crlf}";
-		print "--no-ansi        - disable ansi color${crlf}";
-		print "--debug          - enable debug output${crlf}";
-		print "--no-status      - disable connection status messages${crlf}";
+		print "-l logfilename         - log to the specified filename${crlf}";
+		print "-mr #                  - max connection retries${crlf}";
+		print "-x command             - execute a single rcon command and exit${crlf}";
+		print "-xq command            - -x, --no-ansi, --no-console-timestamp, --no-status${crlf}";
+		print "--nologging            - disable logging${crlf}";
+		print "--ansi                 - enable ansi color${crlf}";
+		print "--no-ansi              - disable ansi color${crlf}";
+		print "--debug                - enable debug output${crlf}";
+		print "--no-status            - disable connection status messages${crlf}";
 		print "--no-console-timestamp - disable console timestamp display${crlf}";
-		print "--console-timestamp - enable console timestamp display${crlf}";
+		print "--console-timestamp    - enable console timestamp display${crlf}";
 		print "${crlf}";
 		print "Example of interactive use:${crlf}";
 		print "  $0 -s 1.2.3.4 -p 5728 ${crlf}";
@@ -382,26 +394,7 @@ sub client_connect
 
 		if ($client_connected == 0)
 		{
-			$connect_retries_count++;
-
-			
-			if ($single_command_only == 1 || ($connect_retries_count >= $connect_retries_maxcount && $connect_retries_maxcount > -1))
-			{
-				die "Connection failed due to timeout.${crlf}";
-			}
-			else {
-
-				if ($connect_retries_maxcount > -1)
-				{
-					$tempstring = "${connect_retries_count}/${connect_retries_maxcount} ";
-				}
-				else
-				{
-					$tempstring = "";
-				}
-
-				statusprint( "Connection failed.  Retrying in $connect_retry_timeout seconds. $tempstring${crlf}","red");
-			}
+			client_timed_out();
 			sleep $connect_retry_timeout;
 		}
 
@@ -415,6 +408,32 @@ sub client_connect
 	statusprint ("Connection established${crlf}");
 }
 
+sub client_timed_out
+{
+		my $tempstring;
+		$connect_retries_count++;
+
+		
+		if ($single_command_only == 1 || ($connect_retries_count >= $connect_retries_maxcount && $connect_retries_maxcount > -1))
+		{
+			die "Connection failed due to timeout.${crlf}";
+		}
+		else
+		{
+			if ($connect_retries_maxcount > -1)
+			{
+				$tempstring = "${connect_retries_count}/${connect_retries_maxcount} ";
+			}
+			else
+			{
+				$tempstring = "";
+			}
+			statusprint( "Connection failed.  Retrying in $connect_retry_timeout seconds. $tempstring${crlf}","red");
+		}
+		$client_connected = 0;
+		$rcon_logged_in = 0;
+		client_disconnect();
+}
 
 sub socket_connect 
 {
@@ -498,6 +517,7 @@ sub rcon_login
 	# RCON LOGIN
 	#sleep 1;
 	sendauth ($rcon_password,"AUTH");
+	$connect_retry_timer = 0;
 }
 
 #stuff to do when we get authorized to rcon
@@ -661,13 +681,28 @@ sub process_incoming_packet
 				}
 				else
 				{
-					debugprint ("Skipping filler packet, not printing\n");
+					if ($config_display_type_zero == 0)
+					{
+						debugprint ("Skipping filler packet, not printing\n");
+					}
+					else
+					{
+						logandprint ("packet_text$crlf");
+					}
 				}
 			}
 		}
 		else
 		{
-			debugprint("- Discarded packet id ${packet_id}${crlf}");
+			if ($config_display_type_zero == 0)
+			{
+				debugprint("- Discarded packet id ${packet_id}${crlf}");
+			}
+                        else
+                        {
+                                logandprint ("packet_text$crlf");
+                        }
+
 		}
 	}
 
@@ -1083,6 +1118,21 @@ sub process_incoming_text
 
 sub process_timers
 {
+
+	if ($rcon_logged_in == 0 && $client_connected == 1)
+	{
+		$connect_retry_timer++;
+		if ($connect_retry_timer > ( $connect_retry_timeout - 1 ))
+		{
+			debugprint("Timeout waiting for authorization\n");
+			client_timed_out();
+		}
+		else
+		{
+			debugprint("Waiting for authorization ($connect_retry_timer / $connect_retry_timeout)\n");
+		}		
+	}
+
 
 	if ($timer_enabled ==0 && $exit_in_seconds == -1)
 	{

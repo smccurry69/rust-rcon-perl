@@ -174,7 +174,7 @@ while (1)
 		else 
 		{
 			$login_timer = 0;
-			logandprint("No login within time limit.  Retrying.${crlf}");
+                        logandprint("No login within time limit.  Try setting +rcon.web 0, rcon web not yet supported. Retrying.${crlf}");
 			client_disconnect();
 			sleep 2;
 		}

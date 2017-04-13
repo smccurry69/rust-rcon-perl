@@ -159,6 +159,7 @@ while (1)
 	#if disconnected, connect
 	while ($client_connected == 0) 
 	{
+		debugprint("Starting connection...\n");
 		# start the connection
 		client_connect();
 		rcon_login();
@@ -174,7 +175,7 @@ while (1)
 		else 
 		{
 			$login_timer = 0;
-			logandprint("No login within time limit.  Retrying.${crlf}");
+			logandprint("No login within time limit.  Try setting +rcon.web 0, rcon web not yet supported. Retrying.${crlf}");
 			client_disconnect();
 			sleep 2;
 		}
@@ -1430,8 +1431,8 @@ sub add_player ()
 		$dbgqueue .= localtime(time)." - New user $t_username\n";
 		if ($dbgflag1 == 1)
 		{
-			print "Running test code, event.run has been run\n";
-			send_queue_add ("event.run");
+			print "Running test code, ad.random has been run\n";
+			send_queue_add ("ad.random");
 		}
 	}
 	$playersonline{$t_username} = $t_steamid;
